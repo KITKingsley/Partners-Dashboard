@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Partners Dashboard Revenue Dashboard</title>
+    <link rel="stylesheet" href="styles.css?v=20260529al">
+  </head>
+  <body>
+    <div class="dashboard-shell">
+      <aside class="sidebar">
+
+        <section id="uploadPanel" class="upload-panel" aria-label="Upload data" hidden>
+          <p class="sidebar-section-title">Data</p>
+          <input id="stripeFileInput" type="file" accept=".csv,text/csv" hidden>
+          <button id="uploadStripeButton" type="button">Upload Stripe file</button>
+          <p id="uploadStatus" class="upload-status" role="status" aria-live="polite"></p>
+        </section>
+
+        <section class="controls" aria-label="Filters">
+          <p class="sidebar-section-title">Filters</p>
+          <label>
+            Month
+            <select id="monthFilter"></select>
+          </label>
+          <label>
+            Year
+            <select id="yearFilter"></select>
+          </label>
+          <label>
+            Organization
+            <select id="organizationFilter"></select>
+          </label>
+          <label>
+            Platform
+            <select id="platformFilter"></select>
+          </label>
+
+          <section id="cpMetaStrip" class="cp-meta-strip cp-meta-in-controls" hidden aria-label="Selected channel partner">
+            <p class="sidebar-section-title">Channel partner info</p>
+            <div>
+              <small>Joined</small>
+              <span id="cpMetaJoined" class="cp-meta-value">—</span>
+            </div>
+            <div>
+              <small>Agreement end date</small>
+              <span id="cpMetaAgreementEnd" class="cp-meta-value">—</span>
+            </div>
+            <div>
+              <small>Status</small>
+              <span id="cpMetaStatus" class="cp-meta-value">—</span>
+            </div>
+          </section>
+
+          <button id="resetFilters" type="button" aria-label="Reset filters" title="Reset filters">Reset filters</button>
+        </section>
+      </aside>
+
+      <main>
+        <header class="app-header">
+          <div class="app-header-brand">
+            <div class="app-header-mark" aria-hidden="true">
+              <img src="Gametize App Logo.png" alt="">
+            </div>
+            <div class="app-header-text">
+              <h2>Partners Dashboard</h2>
+            </div>
+          </div>
+          <button id="signOutButton" class="sign-out-button" type="button" hidden>Sign out</button>
+        </header>
+
+        <section class="summary-strip" aria-label="Dashboard summary">
+          <div class="kpi-card kpi-blue" data-icon="$">
+            <small>Total Revenue</small>
+            <span id="totalRevenue">$0.00</span>
+          </div>
+          <div class="kpi-card kpi-green" data-icon="↗">
+            <small>MoM Growth</small>
+            <span id="momGrowth">0.0%</span>
+            <em id="momGrowthContext">vs previous month</em>
+          </div>
+          <div class="kpi-card kpi-violet" data-icon="▥">
+            <small>YoY Growth</small>
+            <span id="yoyGrowth">0.0%</span>
+            <em id="yoyGrowthContext">vs previous year</em>
+          </div>
+          <div class="kpi-card kpi-amber" data-icon="◆">
+            <small>Average Deal Size</small>
+            <span id="averageAmount">$0.00</span>
+          </div>
+          <div class="kpi-card kpi-blue" data-icon="▣">
+            <small>Transactions</small>
+            <span id="transactionCount">0</span>
+          </div>
+          <div class="kpi-card kpi-teal" data-icon="●●">
+            <small>Organizations</small>
+            <span id="organizationCount">0</span>
+          </div>
+        </section>
+
+        <section class="feature-grid" aria-label="Partner highlights">
+          <article class="panel partner-card">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Top performing partner</p>
+                <h2 id="topPartnerName">—</h2>
+              </div>
+            </div>
+            <div class="partner-card-body">
+              <div class="trophy" aria-hidden="true">
+                <svg viewBox="0 0 64 64" focusable="false">
+                  <path d="M20 12h24v8c0 10-4.8 17.2-12 19.2C24.8 37.2 20 30 20 20v-8Z"></path>
+                  <path d="M20 18H10v4c0 7.2 4.8 12 12 12"></path>
+                  <path d="M44 18h10v4c0 7.2-4.8 12-12 12"></path>
+                  <path d="M32 39v9"></path>
+                  <path d="M23 52h18"></path>
+                  <path d="M20 58h24"></path>
+                </svg>
+              </div>
+              <div>
+                <small>Revenue</small>
+                <strong id="topPartnerRevenue">$0.00</strong>
+              </div>
+              <div>
+                <small>Contribution</small>
+                <strong id="topPartnerContribution">0.0%</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel chart-panel feature-platform-card">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Platforms</p>
+                <h2>Revenue by Platform</h2>
+              </div>
+            </div>
+            <canvas id="platformChart" height="150" aria-label="Platform revenue bar chart"></canvas>
+          </article>
+        </section>
+
+      <section class="insights-grid" aria-label="Revenue analysis">
+        <article class="panel chart-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Month-to-month</p>
+              <h2>Monthly Revenue</h2>
+            </div>
+            <strong id="momDelta">No comparison</strong>
+          </div>
+          <div class="chart-canvas-wrap">
+            <canvas id="monthlyChart" height="260" aria-label="Monthly revenue line chart"></canvas>
+            <div class="chart-tooltip" hidden></div>
+          </div>
+        </article>
+
+        <article class="panel chart-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Year-to-year</p>
+              <h2>Annual Revenue</h2>
+            </div>
+            <strong id="yoyDelta">No comparison</strong>
+          </div>
+          <div class="chart-canvas-wrap">
+            <canvas id="yearlyChart" height="260" aria-label="Yearly revenue line chart"></canvas>
+            <div class="chart-tooltip" hidden></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="detail-layout">
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Organizations</p>
+              <h2>Revenue by Organization</h2>
+            </div>
+          </div>
+          <div id="organizationBars" class="bar-list"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Transactions</p>
+              <h2>Matched Invoice Rows</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Platform</th>
+                  <th>Organization</th>
+                  <th>Subtotal</th>
+                  <th>Discount</th>
+                  <th>Tax</th>
+                  <th>Total Before GST</th>
+                </tr>
+              </thead>
+              <tbody id="transactionRows"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+      </main>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="auth-config.js?v=20260529al"></script>
+    <script src="supabase-auth.js?v=20260529al"></script>
+    <script>
+      window.DashboardAuth.requireAuth();
+      window.DashboardAuth.showSessionControls();
+    </script>
+    <script src="dashboard-data.js?v=20260529al"></script>
+    <script src="app.js?v=20260529al"></script>
+  </body>
+</html>

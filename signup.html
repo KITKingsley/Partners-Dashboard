@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign up | Partners Dashboard</title>
+    <link rel="stylesheet" href="styles.css?v=20260604e">
+  </head>
+  <body class="auth-page">
+    <main class="auth-shell">
+      <section class="auth-panel" aria-label="Sign up">
+        <div class="auth-brand">
+          <img src="Gametize App Logo.png" alt="">
+          <div>
+            <p class="eyebrow">Partners Dashboard</p>
+            <h1>Create account</h1>
+          </div>
+        </div>
+
+        <form id="signUpForm" class="auth-form">
+          <label>
+            Email
+            <input id="emailInput" type="email" autocomplete="email" required>
+          </label>
+          <p id="domainNote" class="auth-note" hidden>Sign up is currently limited to approved email addresses.</p>
+          <label>
+            Password
+            <input id="passwordInput" type="password" autocomplete="new-password" minlength="6" required>
+          </label>
+          <button type="submit">Create account</button>
+          <p id="authStatus" class="auth-status" role="status" aria-live="polite"></p>
+          <p class="auth-switch">Already have an account? <a href="login.html">Sign in</a></p>
+        </form>
+      </section>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="auth-config.js?v=20260604e"></script>
+    <script src="supabase-auth.js?v=20260604e"></script>
+    <script>
+      const form = document.querySelector("#signUpForm");
+      const status = document.querySelector("#authStatus");
+      const emailInput = document.querySelector("#emailInput");
+      const passwordInput = document.querySelector("#passwordInput");
+      const domainNote = document.querySelector("#domainNote");
+
+      if (!window.DashboardAuth.isConfigured()) {
+        status.textContent = "Add your Supabase URL and anon key in auth-config.js to enable sign up.";
+      }
+
+      emailInput.addEventListener("input", () => {
+        const email = emailInput.value.trim().toLowerCase();
+        domainNote.hidden = !email || email.endsWith("@gametize.com");
+      });
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const email = emailInput.value.trim().toLowerCase();
+        if (!email.endsWith("@gametize.com")) {
+          domainNote.hidden = false;
+          status.textContent = "";
+          emailInput.focus();
+          return;
+        }
+
+        domainNote.hidden = true;
+        status.textContent = "Creating account...";
+
+        try {
+          const data = await window.DashboardAuth.signUp(email, passwordInput.value);
+          if (data.session) {
+            window.location.href = "index.html";
+          } else {
+            status.textContent = "Account created. Check your email to confirm your account, then sign in.";
+          }
+        } catch (error) {
+          status.textContent = error.message;
+        }
+      });
+    </script>
+  </body>
+</html>
