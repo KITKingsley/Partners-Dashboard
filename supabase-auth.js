@@ -51,7 +51,7 @@
   }
 
   function getOAuthRedirectUrl() {
-    return getAuthRedirectUrl("/index.html");
+    return getAuthRedirectUrl("/");
   }
 
   async function handleAuthRedirect() {
@@ -351,7 +351,7 @@
           .from(rowsTable)
           .select("id, upload_id, cp, report_type, sheet_name, row_index, row_data")
           .in("upload_id", chunkIds)
-          .gte("row_index", 2)
+          .gte("row_index", 1)
           .order("cp", { ascending: true })
           .order("row_index", { ascending: true })
           .range(from, to);

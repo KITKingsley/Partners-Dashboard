@@ -466,20 +466,92 @@
     }
   }
 
-  function renderHealth(data) {
-    if (!els.healthList) return;
+  function formatProjectCell(value) {
+    if (value === null || value === undefined) return "";
+    if (value instanceof Date) return value.toLocaleString();
 
-    const healthRows = filteredPartnerHealth(data);
-
-    if (!healthRows.length) {
-      const message = data.projectReportRows?.length || data.partnerHealth.length
-        ? "No partner health matches your filters."
-        : "No project statistics uploaded yet. Upload a Project report to see partner credit health.";
-      els.healthList.innerHTML = `<p class="empty">${escapeHtml(message)}</p>`;
-      return;
+    const text = String(value).trim();
+    if (/^\d{4}-\d{2}-\d{2}T/.test(text)) {
+      const date = new Date(text);
+      if (!Number.isNaN(date.getTime())) return date.toLocaleDateString();
     }
 
-    els.healthList.innerHTML = healthRows.map((partner) => {
+    return text;
+  }
+
+  function projectRowsByPartner(projectRows, partnerFilter = "all") {
+    const byPartner = new Map();
+
+    projectRows.forEach((row) => {
+      const cp = String(row.cp || "").trim();
+      if (!cp) return;
+      if (partnerFilter !== "all" && cp !== partnerFilter) return;
+      if (!byPartner.has(cp)) byPartner.set(cp, []);
+      byPartner.get(cp).push(row);
+    });
+
+    return byPartner;
+  }
+
+  function buildProjectStatisticsTable(partnerRows) {
+    const sortedRows = [...partnerRows].sort((a, b) => a.row_index - b.row_index);
+    const headerRow = sortedRows.find((row) => row.row_index === 1);
+    const dataRows = sortedRows.filter((row) => row.row_index >= 2);
+    if (!headerRow || !dataRows.length) return null;
+
+    const headerData = projectRowData(headerRow);
+    const columnKeys = Object.keys(headerData).filter((key) => {
+      if (!key) return false;
+      if (/^Column \d+$/.test(key)) {
+        return dataRows.some((row) => String(projectRowData(row)[key] ?? "").trim() !== "");
+      }
+      return true;
+    });
+
+    return {
+      columns: columnKeys.map((key) => String(headerData[key] ?? key).trim() || key),
+      rows: dataRows.map((row) => {
+        const record = projectRowData(row);
+        return columnKeys.map((key) => formatProjectCell(record[key]));
+      })
+    };
+  }
+
+  function renderProjectStatisticsTables(projectRows, partnerFilter = "all") {
+    const byPartner = projectRowsByPartner(projectRows, partnerFilter);
+    if (!byPartner.size) return "";
+
+    const sections = [];
+
+    byPartner.forEach((rows, cp) => {
+      const table = buildProjectStatisticsTable(rows);
+      if (!table) return;
+
+      sections.push(`
+        <div class="credits-project-stats-block">
+          ${partnerFilter === "all" ? `<h3 class="credits-project-stats-partner">${escapeHtml(cp)}</h3>` : ""}
+          <p class="credits-project-stats-meta">${table.rows.length} project row(s) · ${table.columns.length} column(s)</p>
+          <div class="table-wrap credits-project-stats-wrap">
+            <table class="credits-table credits-project-stats-table">
+              <thead>
+                <tr>${table.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}</tr>
+              </thead>
+              <tbody>
+                ${table.rows.map((cells) => `
+                  <tr>${cells.map((cell) => `<td title="${escapeHtml(cell)}">${escapeHtml(cell)}</td>`).join("")}</tr>
+                `).join("")}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      `);
+    });
+
+    return sections.join("");
+  }
+
+  function renderHealthSummary(healthRows) {
+    return healthRows.map((partner) => {
       const toneClass = partner.tone === "critical"
         ? "is-critical"
         : partner.tone === "warning"
@@ -499,6 +571,26 @@
         </div>
       `;
     }).join("");
+  }
+
+  function renderHealth(data) {
+    if (!els.healthList) return;
+
+    const healthRows = filteredPartnerHealth(data);
+    const projectTablesHtml = data.projectReportRows?.length
+      ? renderProjectStatisticsTables(data.projectReportRows, state.partner)
+      : "";
+    const summaryHtml = healthRows.length ? renderHealthSummary(healthRows) : "";
+
+    if (!summaryHtml && !projectTablesHtml) {
+      const message = data.projectReportRows?.length || data.partnerHealth.length
+        ? "No partner health matches your filters."
+        : "No project statistics uploaded yet. Upload a Project report to see partner credit health.";
+      els.healthList.innerHTML = `<p class="empty">${escapeHtml(message)}</p>`;
+      return;
+    }
+
+    els.healthList.innerHTML = `${summaryHtml}${projectTablesHtml}`;
   }
 
   function renderPagination(totalRows) {

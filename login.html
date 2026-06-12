@@ -59,7 +59,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="auth-config.js?v=20260613a"></script>
-    <script src="supabase-auth.js?v=20260613a"></script>
+    <script src="supabase-auth.js?v=20260613b"></script>
     <script>
       const form = document.querySelector("#signInForm");
       const status = document.querySelector("#authStatus");
@@ -77,7 +77,7 @@
         try {
           const handled = await window.DashboardAuth.handleAuthRedirect();
           if (handled) {
-            window.location.replace("index.html");
+            window.location.replace("/");
           }
         } catch (error) {
           status.textContent = error.message || "Could not complete sign in from email link.";
@@ -111,7 +111,7 @@
 
         try {
           await window.DashboardAuth.signIn(emailInput.value, passwordInput.value);
-          window.location.href = "index.html";
+          window.location.href = "/";
         } catch (error) {
           status.textContent = error.message;
         }

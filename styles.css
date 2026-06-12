@@ -1641,7 +1641,7 @@ td:nth-child(7) {
 
 .credits-bottom-grid {
   display: grid;
-  grid-template-columns: minmax(320px, 1fr) minmax(280px, 0.9fr);
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
@@ -1686,9 +1686,46 @@ td:nth-child(7) {
   background: linear-gradient(90deg, #fbbf24, #f59e0b);
 }
 
+.credits-project-stats-block {
+  display: grid;
+  gap: 8px;
+}
+
+.credits-project-stats-partner {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.credits-project-stats-meta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.credits-project-stats-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  border-radius: 12px;
+}
+
+.credits-project-stats-table {
+  min-width: max-content;
+  font-size: 0.74rem;
+}
+
+.credits-project-stats-table th,
+.credits-project-stats-table td {
+  white-space: nowrap;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .credits-promo-panel {
   position: relative;
   overflow: hidden;
+  align-self: start;
   border: 0;
   background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
   color: #ffffff;
@@ -1698,8 +1735,8 @@ td:nth-child(7) {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 10px;
-  padding: 22px;
+  gap: 8px;
+  padding: 18px 20px;
 }
 
 .credits-promo-content .eyebrow,
@@ -1718,13 +1755,16 @@ td:nth-child(7) {
   border: 0;
   background: #ffffff;
   color: var(--blue);
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .credits-promo-art {
   position: absolute;
-  right: 18px;
-  bottom: 10px;
-  font-size: 4.5rem;
+  right: 14px;
+  bottom: 8px;
+  font-size: 2.75rem;
   opacity: 0.18;
 }
 
