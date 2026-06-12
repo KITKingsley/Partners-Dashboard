@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
 $workspace = Split-Path -Parent $MyInvocation.MyCommand.Path
 $port = if ($args.Count -gt 0) { [int]$args[0] } else { 4173 }
@@ -29,8 +29,12 @@ function Send-Response {
 
     $header = "HTTP/1.1 $StatusCode $StatusText`r`nContent-Type: $ContentType`r`nContent-Length: $($Body.Length)`r`nConnection: close`r`n`r`n"
     $headerBytes = [Text.Encoding]::ASCII.GetBytes($header)
-    $Stream.Write($headerBytes, 0, $headerBytes.Length)
-    $Stream.Write($Body, 0, $Body.Length)
+    try {
+        $Stream.Write($headerBytes, 0, $headerBytes.Length)
+        $Stream.Write($Body, 0, $Body.Length)
+    } catch [System.IO.IOException] {
+        # Client closed the connection before the response finished.
+    }
 }
 
 try {
@@ -57,6 +61,8 @@ try {
                 $body = [IO.File]::ReadAllBytes($resolvedPath)
                 Send-Response -Stream $stream -StatusCode 200 -StatusText 'OK' -ContentType (Get-ContentType $resolvedPath) -Body $body
             }
+        } catch {
+            Write-Host "Request error: $($_.Exception.Message)"
         } finally {
             $client.Close()
         }
