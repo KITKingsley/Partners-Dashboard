@@ -1,0 +1,164 @@
+Ninja HQ - Account Balance Transaction History
+Customer Name: Right Impact
+Customer Email: connect@right-impact.com
+Account Balance
+$2063.45
+All Account Balance Transactions
+Date 	Description 	Amount 	Actions
+26 April 2026 	Credit adjustment by Gametize: Deduction for Projects from Jan to Feb 2026 on Partners
+Plan
+-$1,300.00
+USD
+Invoice not available.
+28 February 2026 	Credit adjustment by Gametize: Deduction for Projects from April to December 2025 on
+Partners Plan
+-$2,800.00
+USD
+Invoice not available.
+18 July 2025 	Credit adjustment by Gametize: Gametize Credits for INV25/0696 	$6,000.00
+USD
+Invoice not available.
+01 June 2025 	Account balance deducted for subscription: Regular Plan
+For Team CSI (ID: 20975)
+-$120.00
+USD
+View Related Invoice
+30 April 2025 	Account balance deducted for subscription: Regular Plan
+For SDC Discovery Race - Sentosa Edition (ID: 22155)
+-$160.00
+USD
+View Related Invoice
+04 March 2025 	Account balance deducted for subscription: Premium Plan
+For THE OFFICE ESCAPE (ID: 21086)
+-$240.08
+USD
+View Related Invoice
+04 March 2025 	Account balance deducted for subscription: Light Plan
+For THE OFFICE ESCAPE (ID: 21086)
+-$60.00 USD 	View Related Invoice
+04 March 2025 	Credit adjustment by Gametize: Full refund (after various refund and goodwill credits) for
+technical difficulties faced by the Right Impact for Project ID:22155
+$336.00 USD 	Invoice not available.
+25 February 2025 	Account balance deducted for subscription: Regular Plan
+For STB Ad-Venture Race (ID: 13163)
+-$60.09 USD 	View Related Invoice
+22 February 2025 	Account balance deducted for subscription: Light Plan
+For STB Ad-Venture Race (ID: 13163)
+-$60.00 USD 	View Related Invoice
+18 February 2025 	Credit adjustment by Gametize: Compensation for Project ID: 22155 due to intermittent
+technical difficulties on 11th Feb 2025
+$100.00 USD 	Invoice not available.
+04 February 2025 	Credit adjustment by Gametize. 	-$200.00
+USD
+Invoice not available.
+04 February 2025 	Credit adjustment by Gametize: Refund for coupon code (Project ID: 22155 and 22140) 	$200.00 USD 	Invoice not available.
+05 January 2025 	Account balance deducted for subscription: Regular Plan
+For SMU MiM Orientation Teambuilding 2025 (ID: 13377)
+-$60.08 USD 	View Related Invoice
+15 December 2024 	Account balance deducted for subscription: Light Plan
+For SMU MiM Orientation Teambuilding 2025 (ID: 13377)
+-$60.00 USD 	View Related Invoice
+17 November 2024 	Account balance deducted for subscription: Premium Plan
+For Team CSI (ID: 20975)
+-$300.00
+USD
+View Related Invoice
+21 October 2024 	Account balance deducted for subscription: Premium Plan
+For SDC Family Day 2024 (ID: 21496)
+-$400.00
+USD
+View Related Invoice
+17 October 2024 	Account balance deducted for subscription: Premium Plan
+For Team CSI (ID: 20975)
+-$240.08
+USD
+View Related Invoice
+Date 	Description 	Amount 	Actions
+15 October 2024 	Account balance deducted for subscription: Light Plan
+For Team CSI (ID: 20975)
+-$60.00 USD 	View Related Invoice
+14 September 2024 	Account balance deducted for subscription: Premium Plan
+For The Office Escape (ID: 8213)
+-$400.00
+USD
+View Related Invoice
+28 August 2024 	Account balance deducted for subscription: Premium Plan
+For One Infra Discovery Adventure (ID: 21011)
+-$500.00
+USD
+View Related Invoice
+27 August 2024 	Account balance deducted for Subscription: Premium Plan
+For One Infra Mall Escape (ID: 21129)
+-$400.00
+USD
+View Related Invoice
+20 August 2024 	Account balance deducted for Subscription: Premium Plan
+For THE OFFICE ESCAPE (ID: 21086)
+-$300.00
+USD
+View Related Invoice
+16 August 2024 	Account balance deducted for Subscription: Regular Plan
+For SMU MQF/MEI Orientation Teambuilding 2024 (ID: 21075)
+-$200.00
+USD
+View Related Invoice
+16 August 2024 	Account balance deducted for Subscription: Regular Plan
+For SMU MAF Orientation Teambuilding 2024 (ID: 21073)
+-$200.00
+USD
+View Related Invoice
+15 August 2024 	Credit adjustment by Gametize: Subscription for Project ID:20975 (Charged on 23rd July to
+Credit Card)
+-$327.00
+USD
+Invoice not available.
+15 August 2024 	Credit adjustment by Gametize: Credits for Project ID:20975 (Charged on 23rd July to Credit
+Card)
+$327.00 USD 	Invoice not available.
+15 August 2024 	Credit adjustment by Gametize: Refund for renewals incorrectly performed for Project IDs
+13163 and 16141 on 15th August 2024.
+$120.16 USD 	Invoice not available.
+15 August 2024 	Account balance deducted for Subscription: Regular Plan
+For STB Ad-Venture Race (ID: 13163)
+-$60.16 USD 	View Related Invoice
+15 August 2024 	Account balance deducted for Subscription: Light Plan
+For The Amazing RSVP Race - Original (ID: 16141)
+-$60.00 USD 	View Related Invoice
+07 August 2024 	Credit adjustment by Gametize: Deduct remaining tax amount issued for INV24/0513
+(Payment with GAB is not subject to tax)
+-$418.31
+USD
+Invoice not available.
+28 July 2024 	Account balance deducted for Subscription: Premium Plan
+For One Infra Discovery Adventure (ID: 21011)
+-$500.00
+USD
+View Related Invoice
+23 July 2024 	Account balance deducted for Subscription: Regular Plan
+For Team CSI Singapore (ID: 17152)
+-$200.00
+USD
+View Related Invoice
+22 July 2024 	Account balance deducted for Subscription: Regular Plan
+For Team CSI International (ID: 10663)
+-$100.13
+USD
+View Related Invoice
+22 July 2024 	Account balance deducted for Subscription: Light Plan
+For Team CSI International (ID: 10663)
+-$100.00
+USD
+View Related Invoice
+15 July 2024 	Account balance deducted for Subscription: Light Plan
+For STB Ad-Venture Race (ID: 13163)
+-$100.00
+USD
+View Related Invoice
+15 July 2024 	Account balance deducted for Subscription: Light Plan
+For The Amazing RSVP Race - Original (ID: 16141)
+-$100.00
+USD
+View Related Invoice
+12 June 2024 	Account balance as of 12/06/2024 	$5,066.22
+USD
+Invoice not available.

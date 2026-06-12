@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.wrangler/
+.cursor/
+*.log
+
+# Vendored copies (use node_modules instead)
+adler-32/
+cfb/
+ssf/
+wmf/
+word/
+xlsx/
