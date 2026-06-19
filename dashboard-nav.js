@@ -2,7 +2,9 @@
   const views = {
     dashboard: document.querySelector("#dashboardView"),
     credits: document.querySelector("#creditsView"),
-    partners: document.querySelector("#partnersView")
+    "credits-user-limit": document.querySelector("#creditsUserLimitView"),
+    partners: document.querySelector("#partnersView"),
+    "platform-settings": document.querySelector("#platformSettingsView")
   };
 
   const navButtons = [...document.querySelectorAll("[data-dashboard-view]")];
@@ -26,8 +28,16 @@
       window.CreditsUsage.hydrate?.() || window.CreditsUsage.render();
     }
 
+    if (viewName === "credits-user-limit" && window.CreditsUserLimit) {
+      window.CreditsUserLimit.hydrate?.() || window.CreditsUserLimit.render();
+    }
+
     if (viewName === "partners" && window.PartnersView) {
       window.PartnersView.render();
+    }
+
+    if (viewName === "platform-settings" && window.PlatformSettings) {
+      window.PlatformSettings.render();
     }
 
     const hash = viewName === "dashboard" ? "" : `#${viewName}`;

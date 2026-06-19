@@ -600,13 +600,15 @@ for (const contact of contacts) {
     partnerMetaByOrg.set(organization, {
       status: contactField(contact, "Status"),
       joinedDate: contactField(contact, "Joined Date"),
-      agreementEndDate: contactField(contact, "Agreement End Date")
+      agreementEndDate: contactField(contact, "Agreement End Date"),
+      note: contactField(contact, "Note", "Notes")
     });
   } else {
     const meta = partnerMetaByOrg.get(organization);
     if (!meta.status) meta.status = contactField(contact, "Status");
     if (!meta.joinedDate) meta.joinedDate = contactField(contact, "Joined Date");
     if (!meta.agreementEndDate) meta.agreementEndDate = contactField(contact, "Agreement End Date");
+    if (!meta.note) meta.note = contactField(contact, "Note", "Notes");
   }
 
   for (const key of splitContactValues(contact["Contact Emails "] || contact["Contact Emails"] || contact.email || contact.Email)) {

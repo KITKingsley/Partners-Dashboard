@@ -291,8 +291,223 @@
     });
   }
 
-  async function getCpContacts() {
-    return callEdgeFunction("get-cp-contacts");
+  function normalizeCpContactRow(row) {
+    const organization = String(
+      pick(row, ["Organization", "organization", "CP name", "CP Name", "Partner", "Partner Name"], "")
+    ).trim();
+
+    if (!organization) return null;
+
+    return {
+      ...row,
+      Organization: organization,
+      "CP name": String(pick(row, ["CP name", "CP Name"], organization) || organization).trim()
+    };
+  }
+
+  function mapCpContactToDbRow(row, source = "dashboard") {
+    const normalized = normalizeCpContactRow(row);
+    if (!normalized) return null;
+
+    const now = new Date().toISOString();
+
+    return {
+      organization: normalized.Organization,
+      cp_name: String(normalized["CP name"] || normalized.Organization || "").trim() || null,
+      status: String(pick(normalized, ["Status", "status"], "")).trim() || null,
+      joined_date: String(pick(normalized, ["Joined Date", "joined_date"], "")).trim() || null,
+      agreement_end_date: String(pick(normalized, ["Agreement End Date", "agreement_end_date"], "")).trim() || null,
+      contact_emails: String(pick(normalized, [
+        "Contact Emails",
+        "contact_emails",
+        "Email",
+        "Customer Email",
+        "Email Address"
+      ], "")).trim() || null,
+      email_domain: String(pick(normalized, ["Email Domain", "email_domain"], "")).trim() || null,
+      note: String(pick(normalized, ["Note", "Notes", "note"], "")).trim() || null,
+      row_data: normalized,
+      source,
+      synced_at: now,
+      updated_at: now
+    };
+  }
+
+  function normalizeCpContactFromDbRow(dbRow) {
+    const rowData = (dbRow?.row_data && typeof dbRow.row_data === "object")
+      ? { ...dbRow.row_data }
+      : {};
+
+    return normalizeCpContactRow({
+      ...rowData,
+      Organization: dbRow.organization || rowData.Organization,
+      "CP name": dbRow.cp_name || rowData["CP name"],
+      Status: dbRow.status || rowData.Status,
+      "Joined Date": dbRow.joined_date || rowData["Joined Date"],
+      "Agreement End Date": dbRow.agreement_end_date || rowData["Agreement End Date"],
+      "Contact Emails": dbRow.contact_emails || rowData["Contact Emails"],
+      "Email Domain": dbRow.email_domain || rowData["Email Domain"],
+      Note: dbRow.note || rowData.Note
+    });
+  }
+
+  async function fetchCpContactsFromTable() {
+    const tableName = config.cpContactsTable || "cp_contacts";
+    const payload = await fetchTableRows(tableName);
+    const rows = (payload.rows || [])
+      .map((row) => normalizeCpContactFromDbRow(row))
+      .filter(Boolean);
+
+    const syncedAt = (payload.rows || [])
+      .map((row) => row.synced_at)
+      .filter(Boolean)
+      .sort()
+      .pop() || null;
+
+    return {
+      rows,
+      count: rows.length,
+      source: "cp_contacts_table",
+      synced_at: syncedAt
+    };
+  }
+
+  async function saveCpContactsToSupabase(rows, source = "dashboard") {
+    const client = getClient();
+    const table = config.cpContactsTable || "cp_contacts";
+    if (!client || !table) {
+      throw new Error("CP contacts table is not configured.");
+    }
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError || !sessionData.session) {
+      throw new Error("Sign in before saving CP contacts.");
+    }
+
+    try {
+      const payload = await callEdgeFunction("get-cp-contacts", {
+        method: "POST",
+        body: { rows, source }
+      });
+      if (payload?.rows?.length) return payload;
+    } catch (edgeError) {
+      console.warn("Could not save CP contacts through edge function:", edgeError);
+    }
+
+    const payload = (rows || [])
+      .map((row) => mapCpContactToDbRow(row, source))
+      .filter(Boolean);
+
+    if (!payload.length) {
+      throw new Error("No CP contact rows to save.");
+    }
+
+    const { error: deleteError } = await client.from(table).delete().neq("id", 0);
+    if (deleteError) throw deleteError;
+
+    const chunkSize = 250;
+    let insertedRows = 0;
+    for (let start = 0; start < payload.length; start += chunkSize) {
+      const chunk = payload.slice(start, start + chunkSize);
+      const { error } = await client.from(table).insert(chunk);
+      if (error) throw error;
+      insertedRows += chunk.length;
+    }
+
+    return fetchCpContactsFromTable().then((cached) => ({
+      ...cached,
+      saved_count: insertedRows
+    }));
+  }
+
+  async function syncCpContacts(options = {}) {
+    const forceRefresh = options.refresh === true;
+
+    if (!forceRefresh) {
+      try {
+        const cached = await fetchCpContactsFromTable();
+        if (cached.rows?.length) return cached;
+      } catch (tableError) {
+        console.warn("CP contacts table read failed:", tableError);
+      }
+    }
+
+    try {
+      const payload = await callEdgeFunction("get-cp-contacts", {
+        method: forceRefresh ? "POST" : "GET",
+        body: forceRefresh ? { refresh: true } : undefined
+      });
+      if (payload?.rows?.length) return payload;
+    } catch (error) {
+      console.warn("get-cp-contacts edge function failed:", error);
+
+      try {
+        const cached = await fetchCpContactsFromTable();
+        if (cached.rows?.length) {
+          return {
+            ...cached,
+            warning: error.message || "Live CP contacts sync failed. Loaded cached Supabase data."
+          };
+        }
+      } catch (tableError) {
+        console.warn("cp_contacts table fallback failed:", tableError);
+      }
+
+      const fallbackRows = buildCpContactsFallbackRows();
+      if (fallbackRows.length) {
+        return saveCpContactsToSupabase(fallbackRows, "dashboard_fallback");
+      }
+
+      throw error;
+    }
+
+    const fallbackRows = buildCpContactsFallbackRows();
+    if (fallbackRows.length) {
+      return saveCpContactsToSupabase(fallbackRows, "dashboard_fallback");
+    }
+
+    throw new Error("No CP contacts available.");
+  }
+
+  async function getCpContacts(options = {}) {
+    return syncCpContacts(options);
+  }
+
+  function buildCpContactsFallbackRows() {
+    const rows = [];
+    const seen = new Set();
+
+    const addRow = (organization, extra = {}) => {
+      const name = String(organization || "").trim();
+      if (!name || seen.has(name.toLowerCase())) return;
+      seen.add(name.toLowerCase());
+      rows.push({
+        Organization: name,
+        "CP name": name,
+        ...extra
+      });
+    };
+
+    (window.DASHBOARD_DATA?.rows || []).forEach((row) => {
+      addRow(row.Organization, {
+        "Customer Email": String(row["Customer Email"] || "").trim(),
+        Email: String(row["Customer Email"] || "").trim()
+      });
+    });
+
+    Object.entries(window.DASHBOARD_DATA?.partnersByOrganization || {}).forEach(([organization, meta]) => {
+      addRow(organization, {
+        Status: meta?.status || "",
+        "Joined Date": meta?.joinedDate || "",
+        "Agreement End Date": meta?.agreementEndDate || ""
+      });
+    });
+
+    if (window.PartnersView?.getPartnerNames) {
+      window.PartnersView.getPartnerNames().forEach((organization) => addRow(organization));
+    }
+
+    return rows;
   }
 
   async function getCreditUsageLogs() {
@@ -309,64 +524,374 @@
     return fetchTableRows(config.partnerCreditBalancesTable);
   }
 
-  async function getLatestProjectReportRows() {
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+  function isUuid(value) {
+    return UUID_PATTERN.test(String(value || "").trim());
+  }
+
+  function toCreditsUserLimitNumber(value) {
+    const number = Number(String(value ?? "").replace(/[^0-9.-]/g, ""));
+    return Number.isFinite(number) ? number : 0;
+  }
+
+  function mapCreditsUserLimitFromDb(row) {
+    return {
+      id: row.id,
+      partnerName: row.partner_name || "",
+      pic: row.pic || "",
+      project: row.project || "",
+      licenseEndDate: row.license_end_date || "",
+      creditsAllocated: Math.max(0, toCreditsUserLimitNumber(row.credits_allocated)),
+      creditsUsed: Math.max(0, toCreditsUserLimitNumber(row.credits_used)),
+      termsAndCondition: row.terms_and_condition || ""
+    };
+  }
+
+  function mapCreditsUserLimitToDb(row, userId) {
+    const id = isUuid(row?.id) ? row.id : crypto.randomUUID();
+    return {
+      id,
+      partner_name: String(row?.partnerName || "").trim(),
+      pic: String(row?.pic || "").trim(),
+      project: String(row?.project || "").trim(),
+      license_end_date: String(row?.licenseEndDate || "").trim() || null,
+      credits_allocated: Math.max(0, toCreditsUserLimitNumber(row?.creditsAllocated)),
+      credits_used: Math.max(0, toCreditsUserLimitNumber(row?.creditsUsed)),
+      terms_and_condition: String(row?.termsAndCondition || "").trim(),
+      updated_at: new Date().toISOString(),
+      updated_by: userId || null
+    };
+  }
+
+  async function getCreditsUserLimitRows() {
+    const table = config.creditsUserLimitTable || "credits_user_limit";
+    if (!table) {
+      return { rows: [], count: 0 };
+    }
+
+    const payload = await fetchTableRows(table);
+    const rows = (payload.rows || [])
+      .map(mapCreditsUserLimitFromDb)
+      .sort((left, right) => left.partnerName.localeCompare(right.partnerName, undefined, { sensitivity: "base" }));
+
+    return { rows, count: rows.length };
+  }
+
+  async function saveCreditsUserLimitRows(rows = []) {
+    const client = getClient();
+    const table = config.creditsUserLimitTable || "credits_user_limit";
+    if (!client || !table) {
+      throw new Error("Credits user limit table is not configured.");
+    }
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError || !sessionData.session?.user) {
+      throw new Error("Sign in before saving user limit rows.");
+    }
+
+    const userId = sessionData.session.user.id;
+    const payload = (rows || []).map((row) => mapCreditsUserLimitToDb(row, userId));
+
+    const { data: existing, error: existingError } = await client
+      .from(table)
+      .select("id");
+    if (existingError) {
+      throw new Error(existingError.message || "Could not read existing user limit rows.");
+    }
+
+    const nextIds = new Set(payload.map((row) => row.id));
+    const deleteIds = (existing || [])
+      .map((row) => row.id)
+      .filter((id) => !nextIds.has(id));
+
+    if (deleteIds.length) {
+      const { error: deleteError } = await client.from(table).delete().in("id", deleteIds);
+      if (deleteError) {
+        throw new Error(deleteError.message || "Could not remove deleted user limit rows.");
+      }
+    }
+
+    if (payload.length) {
+      const chunkSize = 250;
+      for (let start = 0; start < payload.length; start += chunkSize) {
+        const chunk = payload.slice(start, start + chunkSize);
+        const { error } = await client.from(table).upsert(chunk, { onConflict: "id" });
+        if (error) {
+          throw new Error(error.message || "Could not save user limit rows.");
+        }
+      }
+    }
+
+    return getCreditsUserLimitRows();
+  }
+
+  function uploadPartnerKey(upload) {
+    return String(upload?.cp || upload?.cp_partner || "").trim();
+  }
+
+  function creditReportRowIdentityKey(row) {
+    const uploadId = String(row?.upload_id || "").trim();
+    const sheet = String(row?.sheet_name || "").trim();
+    const data = row?.row_data || {};
+    let projectId = "";
+
+    for (const [key, value] of Object.entries(data)) {
+      const normalized = normalizeReportFieldKey(key);
+      if (normalized === "projectid" || normalized === "id") {
+        const text = String(value || "").trim();
+        if (text && text.toLowerCase() !== "project id") {
+          projectId = text;
+          break;
+        }
+      }
+    }
+
+    if (!projectId) {
+      for (const [key, value] of Object.entries(data)) {
+        if (normalizeReportFieldKey(key) === "title") {
+          const text = String(value || "").trim();
+          if (text && text.toLowerCase() !== "title") {
+            projectId = `title:${text}`;
+            break;
+          }
+        }
+      }
+    }
+
+    const rowIndex = Number(row?.row_index) || 0;
+    return `${uploadId}|${sheet}|${projectId || `row:${rowIndex}`}`;
+  }
+
+  function isMeaningfulCreditReportRow(row) {
+    const data = row?.row_data || {};
+    let hasProjectId = false;
+    let hasTitle = false;
+
+    for (const [key, value] of Object.entries(data)) {
+      const normalized = normalizeReportFieldKey(key);
+      const text = String(value || "").trim();
+      if (!text) continue;
+      if (normalized === "projectid" && text.toLowerCase() !== "project id") {
+        hasProjectId = true;
+      }
+      if (normalized === "title" && text.toLowerCase() !== "title") {
+        hasTitle = true;
+      }
+    }
+
+    return hasProjectId || hasTitle;
+  }
+
+  function dedupeCreditReportRows(rows) {
+    const kept = new Map();
+
+    (rows || []).filter((row) => {
+      if (String(row?.report_type || "").trim() === "admin_logs") return true;
+      return isMeaningfulCreditReportRow(row);
+    }).forEach((row) => {
+      const key = String(row?.report_type || "").trim() === "admin_logs"
+        ? `${row.upload_id}|${row.sheet_name}|row:${row.row_index}`
+        : creditReportRowIdentityKey(row);
+      const existing = kept.get(key);
+      if (!existing || Number(row.row_index) < Number(existing.row_index)) {
+        kept.set(key, row);
+      }
+    });
+
+    return [...kept.values()].sort((left, right) => {
+      const sheetCompare = String(left.sheet_name || "").localeCompare(String(right.sheet_name || ""));
+      if (sheetCompare !== 0) return sheetCompare;
+      return Number(left.row_index) - Number(right.row_index);
+    });
+  }
+
+  async function fetchCreditReportRowsForUploadIds(client, rowsTable, uploadIds, options = {}) {
+    const pageSize = 1000;
+    const parallelPages = 5;
+    const requireProjectIdentity = options.requireProjectIdentity === true;
+
+    async function fetchUploadRows(uploadId) {
+      const rows = [];
+      let page = 0;
+
+      while (true) {
+        const requests = [];
+        for (let index = 0; index < parallelPages; index += 1) {
+          const from = (page + index) * pageSize;
+          let query = client
+            .from(rowsTable)
+            .select("id, upload_id, cp, report_type, sheet_name, row_index, row_data")
+            .eq("upload_id", uploadId)
+            .order("row_index", { ascending: true })
+            .range(from, from + pageSize - 1);
+
+          if (requireProjectIdentity) {
+            query = query.or("row_data->>Project ID.neq.,row_data->>Title.neq.");
+          }
+
+          requests.push(query);
+        }
+
+        const responses = await Promise.all(requests);
+        let reachedEnd = false;
+
+        responses.forEach(({ data, error }) => {
+          if (error) throw error;
+          if (!data?.length) {
+            reachedEnd = true;
+            return;
+          }
+          rows.push(...data);
+          if (data.length < pageSize) reachedEnd = true;
+        });
+
+        if (reachedEnd) break;
+        page += parallelPages;
+      }
+
+      return rows;
+    }
+
+    const rows = [];
+    for (const uploadId of uploadIds) {
+      rows.push(...await fetchUploadRows(uploadId));
+    }
+
+    return dedupeCreditReportRows(rows);
+  }
+
+  async function getLatestCreditReportRows(reportType) {
     const client = getClient();
     const uploadsTable = config.creditReportUploadsTable || "credit_report_uploads";
     const rowsTable = config.creditReportRowsTable || "credit_report_rows";
+    const type = String(reportType || "").trim();
 
-    if (!client) {
-      return { rows: [], count: 0, uploads: [] };
+    if (!client || !type) {
+      return { rows: [], count: 0, uploads: [], error: "" };
     }
 
     const { data: uploads, error: uploadsError } = await client
       .from(uploadsTable)
-      .select("id, cp, uploaded_at, file_name")
-      .eq("report_type", "project")
+      .select("id, cp, cp_partner, uploaded_at, file_name, report_type")
+      .eq("report_type", type)
       .order("uploaded_at", { ascending: false });
 
     if (uploadsError) throw uploadsError;
 
     const latestUploadByCp = new Map();
     (uploads || []).forEach((upload) => {
-      const cp = String(upload.cp || "").trim();
+      const cp = uploadPartnerKey(upload);
       if (!cp || latestUploadByCp.has(cp)) return;
       latestUploadByCp.set(cp, upload);
     });
 
-    const uploadIds = [...latestUploadByCp.values()].map((upload) => upload.id);
+    const latestUploads = [...latestUploadByCp.values()];
+    const uploadIds = latestUploads.map((upload) => upload.id).filter(Boolean);
     if (!uploadIds.length) {
-      return { rows: [], count: 0, uploads: [] };
+      return { rows: [], count: 0, uploads: latestUploads, error: "" };
     }
 
-    const rows = [];
-    const pageSize = 1000;
-    const idChunkSize = 50;
-
-    for (let chunkStart = 0; chunkStart < uploadIds.length; chunkStart += idChunkSize) {
-      const chunkIds = uploadIds.slice(chunkStart, chunkStart + idChunkSize);
-
-      for (let from = 0; ; from += pageSize) {
-        const to = from + pageSize - 1;
-        const { data, error } = await client
-          .from(rowsTable)
-          .select("id, upload_id, cp, report_type, sheet_name, row_index, row_data")
-          .in("upload_id", chunkIds)
-          .gte("row_index", 1)
-          .order("cp", { ascending: true })
-          .order("row_index", { ascending: true })
-          .range(from, to);
-
-        if (error) throw error;
-        rows.push(...(data || []));
-        if (!data || data.length < pageSize) break;
-      }
-    }
+    const rows = await fetchCreditReportRowsForUploadIds(client, rowsTable, uploadIds, {
+      requireProjectIdentity: type === "project"
+    });
 
     return {
       rows,
       count: rows.length,
-      uploads: [...latestUploadByCp.values()]
+      uploads: latestUploads
     };
+  }
+
+  async function getLatestProjectReportRows() {
+    return getLatestCreditReportRows("project");
+  }
+
+  async function getLatestAdminLogReportRows() {
+    return getLatestCreditReportRows("admin_logs");
+  }
+
+  async function getCreditReportUploadSummary() {
+    const client = getClient();
+    const uploadsTable = config.creditReportUploadsTable || "credit_report_uploads";
+    if (!client) return [];
+
+    const { data, error } = await client
+      .from(uploadsTable)
+      .select("cp, cp_partner, report_type, file_name, uploaded_at")
+      .order("uploaded_at", { ascending: false });
+
+    if (error) throw error;
+
+    const latestByCpAndType = new Map();
+    (data || []).forEach((upload) => {
+      const cp = uploadPartnerKey(upload);
+      const reportType = String(upload.report_type || "").trim();
+      if (!cp || !reportType) return;
+      const key = `${cp}::${reportType}`;
+      if (latestByCpAndType.has(key)) return;
+      latestByCpAndType.set(key, {
+        cp,
+        reportType,
+        fileName: upload.file_name,
+        uploadedAt: upload.uploaded_at
+      });
+    });
+
+    return [...latestByCpAndType.values()];
+  }
+
+  const CREDIT_LOG_UPLOADS_STORAGE_KEY = "dashboard-credit-log-uploads";
+
+  function readStoredCreditLogUploads() {
+    try {
+      const raw = localStorage.getItem(CREDIT_LOG_UPLOADS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function recordCreditLogUpload(cp, fileName) {
+    const cpKey = String(cp || "").trim();
+    const name = String(fileName || "").trim();
+    if (!cpKey || !name) return;
+
+    const entries = readStoredCreditLogUploads().filter((entry) => entry.cp !== cpKey);
+    entries.unshift({
+      cp: cpKey,
+      fileName: name,
+      uploadedAt: new Date().toISOString(),
+      reportType: "credit_logs"
+    });
+
+    try {
+      localStorage.setItem(CREDIT_LOG_UPLOADS_STORAGE_KEY, JSON.stringify(entries.slice(0, 100)));
+    } catch {
+      // Ignore storage quota errors.
+    }
+  }
+
+  function getCreditLogUploadSummary() {
+    return readStoredCreditLogUploads().map((entry) => ({
+      cp: entry.cp,
+      reportType: entry.reportType || "credit_logs",
+      fileName: entry.fileName,
+      uploadedAt: entry.uploadedAt
+    }));
+  }
+
+  async function getCreditUploadSummary() {
+    let reportUploads = [];
+    try {
+      reportUploads = await getCreditReportUploadSummary();
+    } catch (error) {
+      console.warn("Could not load credit report upload summary:", error);
+    }
+
+    return [...reportUploads, ...getCreditLogUploadSummary()].sort(
+      (left, right) => new Date(right.uploadedAt || 0) - new Date(left.uploadedAt || 0)
+    );
   }
 
   const organizationCanonicalRules = [
@@ -632,6 +1157,41 @@
     return { transactions };
   }
 
+  function parseCreditLogHeaderBalance(text) {
+    const normalized = String(text || "").replace(/\r/g, "");
+    const labeledMatch = normalized.match(/Account Balance\s*(?:\r?\n|\s)+\s*(-?\$[\d,]+\.\d{2})/i);
+    if (labeledMatch) return toNumber(labeledMatch[1]);
+
+    const preamble = normalized.split(/All Account Balance Transactions/i)[0] || normalized;
+    const amounts = [...preamble.matchAll(/-?\$[\d,]+\.\d{2}/g)];
+    return amounts.length ? toNumber(amounts[amounts.length - 1][0]) : null;
+  }
+
+  function appendHeaderBalanceSnapshot(rows, headerBalance) {
+    const balance = toNumber(headerBalance);
+    if (!Number.isFinite(balance) || balance < 0) return rows;
+
+    const hasSnapshot = rows.some((row) => /account balance as of/i.test(String(row.description || "")));
+    if (hasSnapshot) return rows;
+
+    const latestDate = rows
+      .map((row) => row.transaction_date)
+      .filter(Boolean)
+      .sort()
+      .pop() || new Date().toISOString().slice(0, 10);
+    const [year, month, day] = latestDate.split("-");
+
+    return [
+      ...rows,
+      {
+        transaction_date: latestDate,
+        description: `Account balance as of ${day}/${month}/${year}`,
+        amount: balance,
+        actions: null
+      }
+    ];
+  }
+
   function parseCreditLogsRaw(text) {
     const allRows = parseCsvRows(text);
     let headerIndex = -1;
@@ -833,6 +1393,27 @@
     return record;
   }
 
+  function normalizeExcelHeaderCell(value) {
+    return String(value ?? "").trim().toLowerCase();
+  }
+
+  function findExcelHeaderRowIndex(grid) {
+    for (let index = 0; index < Math.min(grid.length, 20); index += 1) {
+      const values = (grid[index] || []).map(normalizeExcelHeaderCell);
+      const hasTitle = values.some((value) => value === "title" || value === "project title");
+      const hasCreation = values.some((value) =>
+        value.includes("creation") && value.includes("date")
+      );
+      const hasMonth = values.some((value) => value === "month" || value === "evaluation month");
+
+      if ((hasTitle && hasCreation) || (hasTitle && hasMonth)) {
+        return index;
+      }
+    }
+
+    return 0;
+  }
+
   async function parseExcelReport(file) {
     const XLSX = window.XLSX;
     if (!XLSX) {
@@ -844,7 +1425,8 @@
 
     workbook.SheetNames.forEach((sheetName) => {
       const grid = sheetToFullGrid(workbook.Sheets[sheetName]);
-      const columnKeys = grid.length ? buildExcelColumnKeys(grid[0]) : [];
+      const headerIndex = findExcelHeaderRowIndex(grid);
+      const columnKeys = grid.length ? buildExcelColumnKeys(grid[headerIndex] || grid[0]) : [];
       const rows = grid.map((row, index) => ({
         rowIndex: index + 1,
         rowData: gridRowToRecord(row, columnKeys)
@@ -905,7 +1487,166 @@
     }
   }
 
-  async function uploadCreditReport(file, cpPartner, reportType) {
+  const MONTHLY_SHEET_PATTERN = /^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}$/i;
+  const reportMonthFmt = new Intl.DateTimeFormat("en-US", { month: "short", year: "numeric", timeZone: "UTC" });
+
+  function normalizeReportFieldKey(key) {
+    return String(key || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  function normalizeMonthLabel(value) {
+    const text = String(value ?? "").trim();
+    if (!text) return "";
+
+    const namedMonth = text.match(/^([A-Za-z]+)\s+(\d{4})$/);
+    if (namedMonth) {
+      const parsed = new Date(`${namedMonth[2]} ${namedMonth[1]} 1 00:00:00 UTC`);
+      if (!Number.isNaN(parsed.getTime())) {
+        return reportMonthFmt.format(parsed);
+      }
+    }
+
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return reportMonthFmt.format(new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), 1)));
+    }
+
+    const isoMatch = text.match(/^(\d{4})-(\d{2})/);
+    if (isoMatch) {
+      const parsed = new Date(Date.UTC(Number(isoMatch[1]), Number(isoMatch[2]) - 1, 1));
+      if (!Number.isNaN(parsed.getTime())) {
+        return reportMonthFmt.format(parsed);
+      }
+    }
+
+    return text;
+  }
+
+  function monthLabelsMatch(left, right) {
+    const leftLabel = normalizeMonthLabel(left);
+    const rightLabel = normalizeMonthLabel(right);
+    return Boolean(leftLabel && rightLabel && leftLabel === rightLabel);
+  }
+
+  function isMonthlySheetName(value) {
+    return MONTHLY_SHEET_PATTERN.test(String(value || "").trim());
+  }
+
+  function isEvaluationMonthFieldKey(key) {
+    const normalized = normalizeReportFieldKey(key);
+    return normalized === "month"
+      || normalized === "evalmonth"
+      || (normalized.includes("evaluation") && normalized.includes("month"));
+  }
+
+  function setEvaluationMonthOnRowData(rowData, monthLabel) {
+    const data = { ...(rowData || {}) };
+    let updated = false;
+
+    Object.keys(data).forEach((key) => {
+      if (!isEvaluationMonthFieldKey(key)) return;
+      data[key] = monthLabel;
+      updated = true;
+    });
+
+    if (!updated) {
+      data["Evaluation Month"] = monthLabel;
+    }
+
+    return data;
+  }
+
+  function tagRowWithEvaluationMonth(row, monthLabel) {
+    return {
+      ...row,
+      sheet_name: monthLabel,
+      row_data: setEvaluationMonthOnRowData(row.row_data, monthLabel)
+    };
+  }
+
+  function rowMatchesEvaluationMonth(row, monthLabel) {
+    const label = normalizeMonthLabel(monthLabel);
+    if (!label) return false;
+
+    if (monthLabelsMatch(row.sheet_name, label)) return true;
+
+    const data = row.row_data || {};
+    return Object.entries(data).some(([key, value]) => (
+      isEvaluationMonthFieldKey(key) && monthLabelsMatch(value, label)
+    ));
+  }
+
+  function extractRowsForTargetMonth(parsedSheets, uploadId, partner, type, targetMonth) {
+    const label = normalizeMonthLabel(targetMonth);
+    const matchingSheets = parsedSheets.filter((sheet) => monthLabelsMatch(sheet.sheetName, label));
+
+    if (matchingSheets.length) {
+      return flattenExcelReportRows(matchingSheets, uploadId, partner, type);
+    }
+
+    const sourceSheets = parsedSheets.filter((sheet) => !isMonthlySheetName(sheet.sheetName));
+    if (!sourceSheets.length) {
+      return [];
+    }
+
+    return flattenExcelReportRows(sourceSheets, uploadId, partner, type)
+      .map((row) => tagRowWithEvaluationMonth(row, label));
+  }
+
+  function normalizeTargetMonths(options = {}) {
+    const raw = Array.isArray(options.targetMonths)
+      ? options.targetMonths
+      : options.targetMonth
+        ? [options.targetMonth]
+        : [];
+
+    return [...new Set(raw.map((month) => normalizeMonthLabel(month)).filter(Boolean))];
+  }
+
+  function rowMatchesAnyEvaluationMonth(row, monthLabels) {
+    return monthLabels.some((label) => rowMatchesEvaluationMonth(row, label));
+  }
+
+  function extractRowsForTargetMonths(parsedSheets, uploadId, partner, type, targetMonths) {
+    const rows = [];
+    const seen = new Set();
+
+    targetMonths.forEach((targetMonth) => {
+      extractRowsForTargetMonth(parsedSheets, uploadId, partner, type, targetMonth).forEach((row) => {
+        const key = `${row.sheet_name}|${row.row_index}|${JSON.stringify(row.row_data)}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        rows.push(row);
+      });
+    });
+
+    return rows;
+  }
+
+  function stripCreditReportRowForReinsert(row, uploadId, partner, type) {
+    return {
+      upload_id: uploadId,
+      cp: partner,
+      report_type: type,
+      sheet_name: row.sheet_name,
+      row_index: row.row_index,
+      row_data: row.row_data
+    };
+  }
+
+  async function fetchExistingCreditReportRowsForUploadIds(client, rowsTable, uploadIds, reportType = "") {
+    if (!client || !uploadIds?.length) return [];
+
+    const rows = [];
+    for (const uploadId of uploadIds) {
+      const batch = await fetchCreditReportRowsForUploadIds(client, rowsTable, [uploadId], {
+        requireProjectIdentity: String(reportType || "").trim() === "project"
+      });
+      rows.push(...batch);
+    }
+    return rows;
+  }
+
+  async function uploadCreditReport(file, cpPartner, reportType, options = {}) {
     const client = getClient();
     if (!client) {
       throw new Error("Supabase is not configured yet.");
@@ -913,26 +1654,42 @@
 
     const partner = String(cpPartner || "").trim();
     const type = String(reportType || "").trim().toLowerCase();
+    const mergeMonthOnly = options.mergeMonthOnly === true;
+    const targetMonths = normalizeTargetMonths(options);
+    const targetMonth = targetMonths[0] || "";
+
     if (!partner) {
       throw new Error("Select a channel partner before uploading a report.");
     }
     if (!["project", "admin_logs"].includes(type)) {
       throw new Error("Select a valid report type.");
     }
+    if (mergeMonthOnly && type !== "project") {
+      throw new Error("Month-specific updates are only available for Project reports.");
+    }
+    if (mergeMonthOnly && !targetMonths.length) {
+      throw new Error("Select at least one evaluation month to update.");
+    }
     if (!isExcelFile(file)) {
       throw new Error("Upload Report only accepts Excel files (.xlsx or .xls).");
     }
 
     const parsedSheets = await parseExcelReport(file);
-    const reportRows = flattenExcelReportRows(parsedSheets, "", partner, type);
+    let reportRows = mergeMonthOnly
+      ? extractRowsForTargetMonths(parsedSheets, "", partner, type, targetMonths)
+      : flattenExcelReportRows(parsedSheets, "", partner, type);
+
     if (!reportRows.length) {
       const sheetSummary = parsedSheets
         .map((sheet) => `${sheet.sheetName || "Sheet"} (${sheet.rows.length} row(s))`)
         .join(", ");
+      const monthSummary = targetMonths.join(", ");
       throw new Error(
-        sheetSummary
-          ? `No data rows were found in this Excel report. Sheets parsed: ${sheetSummary}.`
-          : "No data rows were found in this Excel report."
+        mergeMonthOnly
+          ? `No rows were found for ${monthSummary} in this Excel report. Sheets parsed: ${sheetSummary || "none"}.`
+          : sheetSummary
+            ? `No data rows were found in this Excel report. Sheets parsed: ${sheetSummary}.`
+            : "No data rows were found in this Excel report."
       );
     }
 
@@ -949,14 +1706,41 @@
     const rowsTable = config.creditReportRowsTable || "credit_report_rows";
     const reportsTable = config.creditReportUploadsTable || "credit_report_uploads";
 
-    const { data: previousUploads, error: previousUploadsError } = await client
+    const { data: previousByCp, error: previousByCpError } = await client
       .from(reportsTable)
       .select("id, storage_path")
-      .eq("cp", partner)
-      .eq("report_type", type);
-    if (previousUploadsError) {
-      throw new Error(previousUploadsError.message || "Could not check existing report uploads.");
+      .eq("report_type", type)
+      .eq("cp", partner);
+    if (previousByCpError) {
+      throw new Error(previousByCpError.message || "Could not check existing report uploads.");
     }
+
+    const { data: previousByPartner, error: previousByPartnerError } = await client
+      .from(reportsTable)
+      .select("id, storage_path")
+      .eq("report_type", type)
+      .eq("cp_partner", partner);
+    if (previousByPartnerError) {
+      throw new Error(previousByPartnerError.message || "Could not check existing report uploads.");
+    }
+
+    const previousUploads = [...new Map(
+      [...(previousByCp || []), ...(previousByPartner || [])]
+        .filter((upload) => upload?.id)
+        .map((upload) => [upload.id, upload])
+    ).values()];
+
+    const previousIds = (previousUploads || []).map((upload) => upload.id).filter(Boolean);
+
+    if (mergeMonthOnly && previousIds.length) {
+      const existingRows = await fetchExistingCreditReportRowsForUploadIds(client, rowsTable, previousIds, type);
+      const keptRows = existingRows
+        .filter((row) => !rowMatchesAnyEvaluationMonth(row, targetMonths))
+        .map((row) => stripCreditReportRowForReinsert(row, uploadId, partner, type));
+      reportRows = [...keptRows, ...reportRows];
+    }
+
+    reportRows = dedupeCreditReportRows(reportRows);
 
     const { error: uploadError } = await client.storage.from(bucket).upload(storagePath, file, {
       cacheControl: "3600",
@@ -989,7 +1773,6 @@
       const rowsWithUploadId = reportRows.map((row) => ({ ...row, upload_id: uploadId }));
       insertedRows = await insertCreditReportRows(rowsWithUploadId);
 
-      const previousIds = (previousUploads || []).map((upload) => upload.id).filter(Boolean);
       if (previousIds.length) {
         const { error: deletePreviousError } = await client
           .from(reportsTable)
@@ -1020,7 +1803,9 @@
       reportType: type,
       cpPartner: partner,
       insertedRows,
-      sheetCount: parsedSheets.length
+      sheetCount: parsedSheets.length,
+      targetMonth: targetMonths.length === 1 ? targetMonths[0] : "",
+      targetMonths
     };
   }
 
@@ -1031,10 +1816,18 @@
     }
 
     const isPdf = /\.pdf$/i.test(file.name) || file.type === "application/pdf";
+    const pdfText = isPdf ? await extractPdfText(file) : "";
     const parsed = isPdf
-      ? parseCreditLogsPdfText(await extractPdfText(file))
+      ? parseCreditLogsPdfText(pdfText)
       : parseCreditLogsRaw(await file.text());
-    const rows = processCreditLogRows(parsed.transactions, partner);
+    let rows = processCreditLogRows(parsed.transactions, partner);
+
+    if (isPdf) {
+      const headerBalance = parseCreditLogHeaderBalance(pdfText);
+      if (headerBalance !== null) {
+        rows = appendHeaderBalanceSnapshot(rows, headerBalance);
+      }
+    }
 
     if (!rows.length) {
       throw new Error(
@@ -1077,11 +1870,30 @@
       }
     }
 
+    recordCreditLogUpload(partner, file.name);
+
     return {
       originalRows: parsed.transactions.length,
       insertedRows,
-      cpPartner: partner
+      cpPartner: partner,
+      fileName: file.name
     };
+  }
+
+  async function getLastStripeUploadDate() {
+    const tableName = config.stripeInvoicesTable || "stripe_invoices";
+    const client = getClient();
+    if (!client) return null;
+
+    const { data, error } = await client
+      .from(tableName)
+      .select("uploaded_at")
+      .order("uploaded_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data?.uploaded_at || null;
   }
 
   async function uploadStripeInvoices(file, cpRows = []) {
@@ -1427,12 +2239,21 @@
     fetchTableRows,
     fetchXeroTables,
     getCpContacts,
+    syncCpContacts,
+    saveCpContactsToSupabase,
+    fetchCpContactsFromTable,
     getCreditUsageLogs,
     getPartnerCreditBalances,
+    getCreditsUserLimitRows,
+    saveCreditsUserLimitRows,
     getLatestProjectReportRows,
+    getLatestAdminLogReportRows,
+    getCreditUploadSummary,
+    recordCreditLogUpload,
     getXeroInvoices,
     getDashboardXeroRows,
     refreshDashboardXeroRows,
+    getLastStripeUploadDate,
     uploadStripeInvoices,
     uploadCreditLogs,
     uploadCreditReport

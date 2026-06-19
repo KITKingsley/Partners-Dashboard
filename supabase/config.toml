@@ -1,0 +1,10 @@
+# CP Revenue Dashboard — linked Supabase project
+# Project dashboard: https://supabase.com/dashboard/project/xfxkljltzyqvgbombtqy
+
+project_id = "xfxkljltzyqvgbombtqy"
+
+[api]
+enabled = true
+
+[db]
+major_version = 15

@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Partners Dashboard Revenue Dashboard</title>
-    <link rel="stylesheet" href="styles.css?v=20260613e">
+    <link rel="stylesheet" href="styles.css?v=20260618j">
   </head>
   <body>
     <div class="dashboard-shell">
@@ -23,15 +23,19 @@
           </button>
           <button type="button" class="sidebar-nav-item" data-dashboard-view="credits">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v10H4V7Zm2 2v6h12V9H6Zm2 8h8v2H8v-2Z"></path></svg>
-            Credit Usage
+            Credit Usage (Plans Limit)
+          </button>
+          <button type="button" class="sidebar-nav-item" data-dashboard-view="credits-user-limit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16v10H4V7Zm2 2v6h12V9H6Zm2 8h8v2H8v-2Z"></path></svg>
+            Credit Usage (User Limit)
           </button>
           <button type="button" class="sidebar-nav-item" data-dashboard-view="partners">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-4 12v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1H4Z"></path></svg>
             Partners
           </button>
-          <button type="button" class="sidebar-nav-item is-disabled" disabled>
+          <button type="button" class="sidebar-nav-item" data-dashboard-view="platform-settings">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM4 12a8 8 0 1 1 16 0 8 8 0 0 1-16 0Z"></path></svg>
-            Settings
+            Platform Settings
           </button>
         </nav>
 
@@ -47,6 +51,9 @@
           <p class="sidebar-section-title">Data</p>
           <input id="stripeFileInput" type="file" accept=".csv,text/csv" hidden>
           <button id="uploadStripeButton" type="button">Upload Stripe file</button>
+          <p class="upload-last-uploaded">
+            Last uploaded: <span id="uploadLastUploadedDate">—</span>
+          </p>
           <p id="uploadStatus" class="upload-status" role="status" aria-live="polite"></p>
         </section>
 
@@ -73,6 +80,7 @@
             </div>
             <div class="app-header-text">
               <h2>Partners Dashboard</h2>
+              <p class="app-header-note">All values are in USD unless otherwise stated</p>
             </div>
           </div>
         </header>
@@ -94,6 +102,15 @@
           <label>
             Platform
             <select id="platformFilter"></select>
+          </label>
+          <label>
+            Status
+            <select id="statusFilter">
+              <option value="all">All statuses</option>
+              <option value="Active">Active</option>
+              <option value="Dormant">Dormant</option>
+              <option value="Inactive">Inactive</option>
+            </select>
           </label>
 
           <section id="cpMetaStrip" class="cp-meta-strip cp-meta-in-controls" hidden aria-label="Selected channel partner">
@@ -317,6 +334,17 @@
                   <option value="admin_logs">Admin Logs</option>
                 </select>
               </label>
+              <div id="creditReportMonthField" class="credits-modal-month-field" hidden>
+                <p class="credits-modal-copy credits-modal-month-copy">Select one or more evaluation months to update. Other months stay unchanged in Partner Credit Health.</p>
+                <fieldset id="creditReportMonthOptionsWrap" class="credits-modal-month-options-wrap" disabled>
+                  <legend class="credits-modal-month-legend">Evaluation month</legend>
+                  <label class="credits-modal-month-select-all" for="creditReportMonthSelectAll">
+                    <input id="creditReportMonthSelectAll" type="checkbox" data-select-all="true">
+                    <span>Select all</span>
+                  </label>
+                  <div id="creditReportUploadMonthOptions" class="credits-modal-month-options" role="group" aria-label="Evaluation months list"></div>
+                </fieldset>
+              </div>
               <div class="credits-modal-actions">
                 <button id="creditReportUploadCancelButton" class="credits-btn-outline" type="button">Cancel</button>
                 <button id="creditReportUploadContinueButton" class="credits-btn-primary" type="button">Choose file</button>
@@ -324,6 +352,16 @@
             </div>
           </div>
           <input id="creditReportFileInput" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden>
+
+          <section class="credits-upload-history-panel panel" aria-label="Uploaded files by partner">
+            <div class="panel-heading credits-panel-heading">
+              <div>
+                <p class="eyebrow credits-accent-bar">Data sources</p>
+                <h2>Uploaded Files</h2>
+              </div>
+            </div>
+            <div id="creditsUploadHistory" class="credits-upload-history"></div>
+          </section>
 
           <section class="credits-summary" aria-label="Credit summary">
             <article class="credits-kpi-card">
@@ -333,7 +371,6 @@
               <div>
                 <small>Total Credits Allocated</small>
                 <strong id="creditsTotalAllocated">0</strong>
-                <em id="creditsAllocatedChange">+0% from last month</em>
               </div>
             </article>
             <article class="credits-kpi-card">
@@ -344,9 +381,31 @@
                 <small>Remaining Balance</small>
                 <strong id="creditsRemainingBalance" class="credits-balance-value">0</strong>
                 <div class="credits-balance-track"><span id="creditsBalanceBar"></span></div>
-                <em class="credits-warning">Refill recommended soon</em>
               </div>
             </article>
+          </section>
+
+          <section class="credits-overview-panel panel" aria-label="CP credit overview">
+            <div class="panel-heading credits-panel-heading">
+              <div>
+                <p class="eyebrow credits-accent-bar">All partners</p>
+                <h2>CP Credit Overview</h2>
+              </div>
+            </div>
+            <div class="table-wrap credits-overview-table-wrap">
+              <table class="credits-table credits-overview-table">
+                <thead>
+                  <tr>
+                    <th>CP</th>
+                    <th>Total Credits Allocated</th>
+                    <th>Remaining Balance</th>
+                    <th>% Remaining</th>
+                  </tr>
+                </thead>
+                <tbody id="creditsPartnerOverviewRows"></tbody>
+                <tfoot id="creditsPartnerOverviewFoot"></tfoot>
+              </table>
+            </div>
           </section>
 
           <section class="credits-history-panel panel" aria-label="Credits transaction history">
@@ -355,6 +414,7 @@
                 <p class="eyebrow credits-accent-bar">Overview</p>
                 <h2>Credits Transaction History</h2>
               </div>
+              <p id="creditsLastGametizeAdjustment" class="credits-last-adjustment" hidden></p>
             </div>
             <div class="table-wrap credits-history-table-wrap">
               <table class="credits-table credits-history-table">
@@ -379,12 +439,44 @@
             <article class="panel credits-health-panel">
               <div class="panel-heading">
                 <div>
-                  <p class="eyebrow credits-accent-bar">Partner health</p>
-                  <h2>Partner Credit Health</h2>
+                  <p class="eyebrow credits-accent-bar">Partner Project</p>
+                  <h2>Monthly Overview</h2>
                 </div>
+                <div id="creditsHealthHeadingTotals" class="credits-health-heading-totals" hidden></div>
               </div>
               <div id="creditsHealthList" class="credits-health-list"></div>
             </article>
+          </section>
+        </section>
+
+        <section id="creditsUserLimitView" class="app-view" hidden>
+          <div class="credits-toolbar">
+            <div>
+              <h2>Credit Usage (User Limit)</h2>
+            </div>
+            <div class="credits-toolbar-actions">
+              <button id="creditsUserLimitAddRow" class="credits-btn-outline" type="button">Add row</button>
+            </div>
+          </div>
+          <p id="creditsUserLimitStatus" class="credits-upload-status" role="status" aria-live="polite"></p>
+          <section class="panel" aria-label="User limit credit usage">
+            <div class="table-wrap credits-user-limit-table-wrap">
+              <table class="credits-user-limit-table">
+                <thead>
+                  <tr>
+                    <th>Partner name</th>
+                    <th>PIC</th>
+                    <th>Project</th>
+                    <th>License end date</th>
+                    <th>Credits allocated</th>
+                    <th>Credits used</th>
+                    <th>Terms and condition</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="creditsUserLimitTableBody"></tbody>
+              </table>
+            </div>
           </section>
         </section>
 
@@ -406,18 +498,70 @@
           <section class="panel partners-panel" aria-label="Partner directory">
             <div class="table-wrap partners-table-wrap">
               <table class="partners-table">
-                <thead>
-                  <tr>
-                    <th>Organization</th>
-                    <th>Status</th>
-                    <th>Joined</th>
-                    <th>Agreement end</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
+                <thead id="partnersTableHead"></thead>
                 <tbody id="partnersTableBody"></tbody>
               </table>
             </div>
+          </section>
+        </section>
+
+        <section id="platformSettingsView" class="app-view" hidden>
+          <header class="platform-settings-header">
+            <div>
+              <p class="eyebrow">Configuration</p>
+              <h2>Platform Settings</h2>
+              <p class="platform-settings-lead">Configure how Partner Credit Health calculates monthly debited amounts from player counts.</p>
+            </div>
+          </header>
+
+          <section class="panel platform-settings-panel" aria-label="Debit calculation settings">
+            <form id="platformSettingsForm" class="platform-settings-form">
+              <div class="platform-settings-section">
+                <div class="platform-settings-section-head">
+                  <div>
+                    <h3>Debit tiers</h3>
+                    <p class="platform-settings-copy">Each project debits the amount for the first tier where players (including removed) is less than or equal to the max players value.</p>
+                  </div>
+                  <button id="platformAddDebitTier" type="button" class="platform-settings-btn">Add tier</button>
+                </div>
+
+                <div class="table-wrap platform-settings-table-wrap">
+                  <table class="platform-settings-table">
+                    <thead>
+                      <tr>
+                        <th>Max players (incl. removed)</th>
+                        <th>Debited (USD)</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody id="platformDebitTiersBody"></tbody>
+                  </table>
+                </div>
+
+                <label class="platform-settings-field">
+                  <span>Default debit for player counts above all tiers</span>
+                  <input id="platformDefaultDebitAmount" type="number" min="0" step="1" inputmode="numeric">
+                </label>
+              </div>
+
+              <div class="platform-settings-preview">
+                <label class="platform-settings-field">
+                  <span>Preview player count</span>
+                  <input id="platformDebitPreviewPlayers" type="number" min="0" step="1" value="137" inputmode="numeric">
+                </label>
+                <div class="platform-settings-preview-result">
+                  <span>Calculated debit</span>
+                  <strong id="platformDebitPreview">US$0.00</strong>
+                </div>
+              </div>
+
+              <div class="platform-settings-actions">
+                <button id="platformResetDebitSettings" type="button" class="platform-settings-btn platform-settings-btn-muted">Reset defaults</button>
+                <button id="platformSaveDebitSettings" type="submit" class="platform-settings-btn platform-settings-btn-primary">Save settings</button>
+              </div>
+
+              <p id="platformSettingsStatus" class="platform-settings-status" role="status" aria-live="polite"></p>
+            </form>
           </section>
         </section>
       </main>
@@ -427,16 +571,19 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="auth-config.js?v=20260613a"></script>
-    <script src="supabase-auth.js?v=20260613d"></script>
+    <script src="supabase-auth.js?v=20260618e"></script>
     <script>
       window.DashboardAuth.requireAuth();
       window.DashboardAuth.showSessionControls();
     </script>
     <script src="dashboard-data.js?v=20260529al"></script>
-    <script src="app.js?v=20260611i"></script>
-    <script src="credits-usage.js?v=20260613d"></script>
-    <script src="partners.js?v=20260611j"></script>
-    <script src="dashboard-nav.js?v=20260611i"></script>
+    <script src="date-format.js?v=20260613c"></script>
+    <script src="app.js?v=20260616a"></script>
+    <script src="platform-settings.js?v=20260616p"></script>
+    <script src="credits-usage.js?v=20260618j"></script>
+    <script src="credits-user-limit.js?v=20260617k"></script>
+    <script src="partners.js?v=20260618k"></script>
+    <script src="dashboard-nav.js?v=20260617h"></script>
     <script src="global-search.js?v=20260611i"></script>
   </body>
 </html>

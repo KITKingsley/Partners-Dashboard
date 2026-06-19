@@ -11,6 +11,7 @@ const assets = [
   "signup.html",
   "styles.css",
   "app.js",
+  "date-format.js",
   "credits-usage.js",
   "partners.js",
   "global-search.js",

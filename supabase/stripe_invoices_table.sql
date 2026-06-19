@@ -32,6 +32,8 @@ create index if not exists stripe_invoices_organization_idx
 
 alter table public.stripe_invoices enable row level security;
 
+drop policy if exists "Users can read uploaded Stripe invoices" on public.stripe_invoices;
+
 create policy "Users can read uploaded Stripe invoices"
   on public.stripe_invoices
   for select

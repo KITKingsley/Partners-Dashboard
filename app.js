@@ -1,9 +1,9 @@
 (function () {
-  const rawRows = (window.DASHBOARD_DATA && window.DASHBOARD_DATA.rows) || [];
-  const partnersByOrganization =
-    (window.DASHBOARD_DATA && window.DASHBOARD_DATA.partnersByOrganization) || {};
-  const bundledRows = rawRows.map(normalizeDashboardRow).filter(Boolean);
-  let rows = bundledRows.slice();
+  const DASHBOARD_DATA_URL = "dashboard-data.js?v=20260529al";
+
+  let partnersByOrganization = {};
+  let bundledRows = [];
+  let rows = [];
   let cpContactsPromise = null;
   let cpContactsLoaded = false;
   let fxRatesPromise = null;
@@ -77,7 +77,7 @@
     return applyCurrentRevenueOverrides({
       id: row.id,
       date,
-      dateLabel: row["Date (UTC)"],
+      dateLabel: formatDisplayDateTime(date),
       day: date.getUTCDate(),
       month,
       year: String(date.getUTCFullYear()),
@@ -104,6 +104,7 @@
     year: "all",
     organization: "all",
     platform: "all",
+    status: "all",
     textSearch: ""
   };
 
@@ -112,6 +113,7 @@
     yearFilter: document.querySelector("#yearFilter"),
     organizationFilter: document.querySelector("#organizationFilter"),
     platformFilter: document.querySelector("#platformFilter"),
+    statusFilter: document.querySelector("#statusFilter"),
     resetFilters: document.querySelector("#resetFilters"),
     uploadPanel: document.querySelector("#uploadPanel"),
     xeroFileInput: document.querySelector("#xeroFileInput"),
@@ -119,6 +121,7 @@
     uploadXeroButton: document.querySelector("#uploadXeroButton"),
     uploadStripeButton: document.querySelector("#uploadStripeButton"),
     uploadStatus: document.querySelector("#uploadStatus"),
+    uploadLastUploadedDate: document.querySelector("#uploadLastUploadedDate"),
     totalRevenue: document.querySelector("#totalRevenue"),
     momGrowth: document.querySelector("#momGrowth"),
     momGrowthContext: document.querySelector("#momGrowthContext"),
@@ -171,21 +174,7 @@
   }
 
   function parseStripeDate(value) {
-    const text = String(value || "").trim();
-    const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})/);
-    if (isoMatch) {
-      const [, year, month, day, hour, minute] = isoMatch.map(Number);
-      return new Date(Date.UTC(year, month - 1, day, hour, minute));
-    }
-
-    const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})/);
-    if (slashMatch) {
-      const [, month, day, year, hour, minute] = slashMatch.map(Number);
-      return new Date(Date.UTC(year, month - 1, day, hour, minute));
-    }
-
-    const parsed = new Date(text);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    return window.DashboardDateFormat?.parseSlashDateTime(value) ?? null;
   }
 
   function formatDateKey(date) {
@@ -282,7 +271,15 @@
   }
 
   function formatDateTime(date) {
-    return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")} ${String(date.getUTCHours()).padStart(2, "0")}:${String(date.getUTCMinutes()).padStart(2, "0")}`;
+    return window.DashboardDateFormat?.formatDisplayDateTime(date) || "—";
+  }
+
+  function formatDisplayDateTime(date) {
+    return window.DashboardDateFormat?.formatDisplayDateTime(date) || "—";
+  }
+
+  function formatPartnerDateValue(value) {
+    return window.DashboardDateFormat?.formatDisplayDateValue(value) || String(value || "");
   }
 
   function applyCurrentRevenueOverrides(row) {
@@ -353,6 +350,7 @@
       const yearMatch = state.month !== "all" || state.year === "all" || row.year === state.year;
       const orgMatch = state.organization === "all" || row.organization === state.organization;
       const platformMatch = state.platform === "all" || row.platform === state.platform;
+      const statusMatch = state.status === "all" || partnerStatusForOrganization(row.organization) === state.status;
       const textMatch = !state.textSearch || [
         row.organization,
         row.platform,
@@ -360,7 +358,7 @@
         row.email,
         row.id
       ].some((value) => String(value || "").toLowerCase().includes(state.textSearch));
-      return monthMatch && yearMatch && orgMatch && platformMatch && textMatch;
+      return monthMatch && yearMatch && orgMatch && platformMatch && statusMatch && textMatch;
     });
   }
 
@@ -374,6 +372,7 @@
     if (state.year !== "all" && !years.includes(state.year)) state.year = "all";
     if (state.organization !== "all" && !organizations.includes(state.organization)) state.organization = "all";
     if (state.platform !== "all" && !platforms.includes(state.platform)) state.platform = "all";
+    if (state.status !== "all" && !["Active", "Dormant", "Inactive"].includes(state.status)) state.status = "all";
 
     els.monthFilter.innerHTML = [
       '<option value="all">All months</option>',
@@ -399,6 +398,7 @@
     els.yearFilter.value = state.year;
     els.organizationFilter.value = state.organization;
     els.platformFilter.value = state.platform;
+    if (els.statusFilter) els.statusFilter.value = state.status;
   }
 
   function formatMonth(month) {
@@ -734,9 +734,6 @@
       restoreBundledRowsIfEmpty();
       populateFilters();
       render();
-      if (els.uploadStatus && !els.uploadPanel?.hidden) {
-        setUploadStatus(error.message || "Could not load cached Xero rows from Supabase.", "is-error");
-      }
     }
   }
 
@@ -797,18 +794,16 @@
       render();
 
       if (els.uploadStatus) {
+        const warning = payload?.warning ? ` ${payload.warning}` : "";
         setUploadStatus(
-          `Matched organizations using ${cpRows.length} CP contact rows. Removed ${matchResult.removedXeroRows} non-CP Xero rows.`,
-          "is-success"
+          `Matched organizations using ${cpRows.length} CP contact row(s)${payload?.source === "dashboard_fallback" ? " (cached fallback)" : ""}.${warning}`,
+          payload?.source === "dashboard_fallback" ? "" : "is-success"
         );
       }
     } catch (error) {
       console.warn("Could not load CP contacts from Supabase:", error);
       populateFilters();
       render();
-      if (els.uploadStatus && !els.uploadPanel?.hidden) {
-        setUploadStatus(error.message || "Could not load CP contacts from Supabase.", "is-error");
-      }
     }
   }
 
@@ -842,6 +837,11 @@
     }
 
     return null;
+  }
+
+  function partnerStatusForOrganization(orgName) {
+    const meta = partnerMetaForOrganization(orgName);
+    return String(meta?.status || "").trim();
   }
 
   function deltaLabel(entries, formatter) {
@@ -1427,8 +1427,8 @@
     }
     strip.hidden = false;
     const meta = partnerMetaForOrganization(state.organization);
-    els.cpMetaJoined.textContent = (meta && meta.joinedDate) || dash;
-    els.cpMetaAgreementEnd.textContent = (meta && meta.agreementEndDate) || dash;
+    els.cpMetaJoined.textContent = meta?.joinedDate ? formatPartnerDateValue(meta.joinedDate) : dash;
+    els.cpMetaAgreementEnd.textContent = meta?.agreementEndDate ? formatPartnerDateValue(meta.agreementEndDate) : dash;
     els.cpMetaStatus.textContent = (meta && meta.status) || dash;
   }
 
@@ -1508,16 +1508,23 @@
     render();
   });
 
+  els.statusFilter?.addEventListener("change", (event) => {
+    state.status = event.target.value;
+    render();
+  });
+
   els.resetFilters?.addEventListener("click", () => {
     state.month = "all";
     state.year = "all";
     state.organization = "all";
     state.platform = "all";
+    state.status = "all";
     state.textSearch = "";
     els.monthFilter.value = "all";
     els.yearFilter.value = "all";
     els.organizationFilter.value = "all";
     els.platformFilter.value = "all";
+    if (els.statusFilter) els.statusFilter.value = "all";
     render();
   });
 
@@ -1528,12 +1535,76 @@
     if (type) els.uploadStatus.classList.add(type);
   }
 
+  function formatUploadDate(iso) {
+    if (!iso) return "—";
+    return window.DashboardDateFormat?.formatUploadTimestampLocal(iso) || "—";
+  }
+
+  async function refreshLastUploadedDate() {
+    if (!els.uploadLastUploadedDate || els.uploadPanel?.hidden) return;
+
+    try {
+      const uploadedAt = window.DashboardAuth?.getLastStripeUploadDate
+        ? await window.DashboardAuth.getLastStripeUploadDate()
+        : null;
+      els.uploadLastUploadedDate.textContent = formatUploadDate(uploadedAt);
+    } catch {
+      els.uploadLastUploadedDate.textContent = "—";
+    }
+  }
+
   function setDataLoadStatus(message, type = "") {
     if (!els.dataLoadStatus || !els.dataLoadStatusText) return;
     els.dataLoadStatus.hidden = !message;
     els.dataLoadStatusText.textContent = message || "";
     els.dataLoadStatus.classList.remove("is-error", "is-success");
     if (type) els.dataLoadStatus.classList.add(type);
+  }
+
+  function reloadBundledRows() {
+    const payload = window.DASHBOARD_DATA || {};
+    partnersByOrganization = payload.partnersByOrganization || {};
+    bundledRows = (payload.rows || []).map(normalizeDashboardRow).filter(Boolean);
+    rows = bundledRows.slice();
+  }
+
+  async function ensureDashboardDataLoaded() {
+    if (window.DASHBOARD_DATA?.rows?.length) {
+      reloadBundledRows();
+      return bundledRows.length > 0;
+    }
+
+    setDataLoadStatus("Loading dashboard data…");
+
+    try {
+      const response = await fetch(DASHBOARD_DATA_URL, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const script = await response.text();
+      const match = script.match(/window\.DASHBOARD_DATA\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
+      if (!match) {
+        throw new Error("Invalid dashboard-data.js payload");
+      }
+
+      window.DASHBOARD_DATA = JSON.parse(match[1]);
+      reloadBundledRows();
+
+      if (!bundledRows.length) {
+        throw new Error("No dashboard rows found");
+      }
+
+      setDataLoadStatus("");
+      return true;
+    } catch (error) {
+      console.error("Dashboard data load failed:", error);
+      setDataLoadStatus(
+        "Dashboard data failed to load. Hard refresh the page or run npm run build:data.",
+        "is-error"
+      );
+      return false;
+    }
   }
 
   function setUploadBusy(isBusy) {
@@ -1556,6 +1627,7 @@
       const canUpload = domain === "gametize.com";
       els.uploadPanel.hidden = !canUpload;
       els.uploadPanel.classList.toggle("can-upload", canUpload);
+      if (canUpload) await refreshLastUploadedDate();
       return canUpload;
     } catch {
       els.uploadPanel.hidden = true;
@@ -1618,11 +1690,20 @@
 
     try {
       const cpPayload = await loadCpContactsPayload();
-      const result = await window.DashboardAuth.uploadStripeInvoices(file, cpPayload.rows || []);
+      const cpRows = cpPayload.rows || [];
+      if (!cpRows.length) {
+        throw new Error("No CP contact rows are available. The Google Sheet sync failed and no cached contacts were found.");
+      }
+
+      const result = await window.DashboardAuth.uploadStripeInvoices(file, cpRows);
+      const fallbackNote = cpPayload.source === "dashboard_fallback"
+        ? " Used cached CP contacts because the live Google Sheet sync failed."
+        : "";
       setUploadStatus(
-        `Stored ${result.insertedRows || 0} Stripe rows in Supabase from ${file.name}. Removed ${result.removedRows || 0} rows.`,
+        `Stored ${result.insertedRows || 0} Stripe rows in Supabase from ${file.name}. Removed ${result.removedRows || 0} rows.${fallbackNote}`,
         "is-success"
       );
+      await refreshLastUploadedDate();
     } catch (error) {
       setUploadStatus(error.message || "Stripe upload to Supabase failed.", "is-error");
     } finally {
@@ -1673,13 +1754,6 @@
   }
 
   window.addEventListener("resize", render);
-
-  if (!rawRows.length) {
-    setDataLoadStatus(
-      "Dashboard data failed to load. Hard refresh the page or run npm run build:data.",
-      "is-error"
-    );
-  }
 
   function rowSearchText(row) {
     return [row.organization, row.platform, row.dateLabel, row.email, row.id]
@@ -1743,9 +1817,16 @@
     }
   };
 
-  configureUploadAccess();
-  populateFilters();
-  render();
-  hydrateCpContactsFromSupabase();
-  hydrateXeroRowsFromSupabase();
+  async function startDashboard() {
+    const loaded = await ensureDashboardDataLoaded();
+    if (!loaded) return;
+
+    await configureUploadAccess();
+    populateFilters();
+    render();
+    hydrateCpContactsFromSupabase();
+    hydrateXeroRowsFromSupabase();
+  }
+
+  startDashboard();
 }());

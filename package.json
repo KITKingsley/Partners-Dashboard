@@ -5,7 +5,7 @@
   "main": "app.js",
   "scripts": {
     "build": "node scripts/build-static-site.mjs",
-    "build:data": "node --use-system-ca build-dashboard-data.mjs",
+    "build:data": "node build-dashboard-data.mjs",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

@@ -10,5 +10,7 @@ window.DASHBOARD_AUTH_CONFIG = {
   partnerCreditBalancesTable: "partner_credit_balances",
   creditReportsBucket: "credit-reports",
   creditReportUploadsTable: "credit_report_uploads",
-  creditReportRowsTable: "credit_report_rows"
+  creditReportRowsTable: "credit_report_rows",
+  creditsUserLimitTable: "credits_user_limit",
+  cpContactsTable: "cp_contacts"
 };

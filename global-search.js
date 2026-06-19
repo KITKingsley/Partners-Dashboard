@@ -16,8 +16,10 @@
 
   function tabLabel(tab) {
     if (tab === "dashboard") return "Dashboard";
-    if (tab === "credits") return "Credit Usage";
+    if (tab === "credits") return "Credit Usage (Plans Limit)";
+    if (tab === "credits-user-limit") return "Credit Usage (User Limit)";
     if (tab === "partners") return "Partners";
+    if (tab === "platform-settings") return "Platform Settings";
     return tab;
   }
 
