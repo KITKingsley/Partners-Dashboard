@@ -2015,11 +2015,9 @@
       return;
     }
 
-    const rows = buildPartnerOverviewRows(data).filter(partnerOverviewMatchesCreditsSearch);
+    const rows = buildPartnerOverviewRows(data);
     if (!rows.length) {
-      const message = creditsSearchQuery()
-        ? "No partners match your search."
-        : "No partner credit data yet. Upload credit logs to populate this overview.";
+      const message = "No partner credit data yet. Upload credit logs to populate this overview.";
       els.partnerOverviewBody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(message)}</td></tr>`;
       if (els.partnerOverviewFoot) els.partnerOverviewFoot.innerHTML = "";
       return;
@@ -2966,7 +2964,6 @@
   function applyCreditsSearch() {
     state.page = 1;
     const data = getData();
-    renderPartnerOverview(data);
     renderHistory(data);
     renderHealth(data);
   }
