@@ -6,7 +6,7 @@
   const DELETE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h5v2H3V5h5l1-2Zm1 6h2v9h-2V9Zm4 0h2v9h-2V9ZM6 9h2v11a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9h2v11a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9Z"></path></svg>';
 
   const STATUS_OPTIONS = ["", "Active", "Dormant", "Inactive"];
-  const CREDIT_ACCOUNTING_OPTIONS = ["", "Plans Limit", "User Limits", "Custom", "NA"];
+  const CREDIT_ACCOUNTING_OPTIONS = ["", "Plans Limit", "User Limit", "Custom"];
 
   const STATUS_SORT_ORDER = {
     Active: 0,
@@ -78,7 +78,7 @@
   ];
 
   const CREDIT_ACCOUNTING_COLUMN = "Credit Accounting method";
-  const CREDIT_ACCOUNTING_HEADER_LABEL = "User Limit";
+  const CREDIT_ACCOUNTING_HEADER_LABEL = "Credits Accounting method";
 
   const COLUMN_IDENTITY_GROUPS = [
     ["creditaccountingmethod", ["Credit Accounting method", "Credit Accounting Method"]],
@@ -1053,16 +1053,23 @@
     }).join("");
   }
 
+  function normalizeCreditAccountingValue(value) {
+    const normalized = String(value || "").trim();
+    if (normalized === "NA") return "";
+    if (normalized === "User Limits") return "User Limit";
+    return normalized;
+  }
+
   function renderCreditAccountingOptions(selected) {
-    const normalized = String(selected || "").trim();
+    const effective = normalizeCreditAccountingValue(selected);
     const options = [...CREDIT_ACCOUNTING_OPTIONS];
-    if (normalized && !options.includes(normalized)) {
-      options.push(normalized);
+    if (effective && !options.includes(effective)) {
+      options.push(effective);
     }
 
     return options.map((option) => {
       const label = option || "—";
-      const isSelected = option === normalized ? " selected" : "";
+      const isSelected = option === effective ? " selected" : "";
       return `<option value="${escapeHtml(option)}"${isSelected}>${escapeHtml(label)}</option>`;
     }).join("");
   }
