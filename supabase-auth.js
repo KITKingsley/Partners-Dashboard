@@ -354,22 +354,118 @@
   async function fetchCpContactsFromTable() {
     const tableName = config.cpContactsTable || "cp_contacts";
     const payload = await fetchTableRows(tableName);
-    const rows = (payload.rows || [])
-      .map((row) => normalizeCpContactFromDbRow(row))
+    const dbRows = payload.rows || [];
+    const dbIdsByOrganization = {};
+    const rows = dbRows
+      .map((row) => {
+        const organization = String(row.organization || "").trim();
+        if (organization) dbIdsByOrganization[organization] = row.id;
+        return normalizeCpContactFromDbRow(row);
+      })
       .filter(Boolean);
 
-    const syncedAt = (payload.rows || [])
-      .map((row) => row.synced_at)
+    const updatedAt = dbRows
+      .map((row) => row.updated_at)
       .filter(Boolean)
       .sort()
       .pop() || null;
 
     return {
       rows,
+      dbIdsByOrganization,
       count: rows.length,
       source: "cp_contacts_table",
-      synced_at: syncedAt
+      updated_at: updatedAt
     };
+  }
+
+  async function upsertCpContact(row, options = {}) {
+    const client = getClient();
+    const table = config.cpContactsTable || "cp_contacts";
+    if (!client || !table) {
+      throw new Error("CP contacts table is not configured.");
+    }
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError || !sessionData.session) {
+      throw new Error("Sign in before saving partners.");
+    }
+
+    const dbRow = mapCpContactToDbRow(row, options.source || "dashboard");
+    if (!dbRow) {
+      throw new Error("Organization name is required.");
+    }
+
+    let id = options.id || null;
+    const previousOrganization = String(options.previousOrganization || "").trim();
+
+    if (!id && previousOrganization) {
+      const { data } = await client
+        .from(table)
+        .select("id")
+        .eq("organization", previousOrganization)
+        .maybeSingle();
+      id = data?.id || null;
+    }
+
+    if (!id) {
+      const { data } = await client
+        .from(table)
+        .select("id")
+        .eq("organization", dbRow.organization)
+        .maybeSingle();
+      id = data?.id || null;
+    }
+
+    const now = new Date().toISOString();
+    dbRow.updated_at = now;
+    dbRow.source = options.source || "dashboard";
+
+    if (id) {
+      const { data, error } = await client
+        .from(table)
+        .update(dbRow)
+        .eq("id", id)
+        .select("id, organization, updated_at")
+        .single();
+      if (error) throw error;
+      return data;
+    }
+
+    const { data, error } = await client
+      .from(table)
+      .insert(dbRow)
+      .select("id, organization, updated_at")
+      .single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function deleteCpContact(options = {}) {
+    const client = getClient();
+    const table = config.cpContactsTable || "cp_contacts";
+    if (!client || !table) {
+      throw new Error("CP contacts table is not configured.");
+    }
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError || !sessionData.session) {
+      throw new Error("Sign in before deleting partners.");
+    }
+
+    const id = options.id || null;
+    const organization = String(options.organization || "").trim();
+    if (!id && !organization) {
+      throw new Error("Partner id or organization is required.");
+    }
+
+    let query = client.from(table).delete();
+    if (id) query = query.eq("id", id);
+    else query = query.eq("organization", organization);
+
+    const { error } = await query;
+    if (error) throw error;
+    return { deleted: true };
   }
 
   async function saveCpContactsToSupabase(rows, source = "dashboard") {
@@ -470,7 +566,18 @@
   }
 
   async function getCpContacts(options = {}) {
-    return syncCpContacts(options);
+    if (options.sync === true) {
+      return syncCpContacts(options);
+    }
+
+    try {
+      return await fetchCpContactsFromTable();
+    } catch (error) {
+      if (options.allowSyncFallback === true) {
+        return syncCpContacts(options);
+      }
+      throw error;
+    }
   }
 
   function buildCpContactsFallbackRows() {
@@ -624,6 +731,70 @@
     }
 
     return getCreditsUserLimitRows();
+  }
+
+  function healthMonthStatusStorageKey(partnerKey, monthLabel) {
+    return `${String(partnerKey || "all").trim()}|${String(monthLabel || "").trim()}`;
+  }
+
+  async function getCreditHealthMonthStatuses() {
+    const table = config.creditHealthMonthStatusTable || "credit_health_month_status";
+    if (!table) return {};
+
+    const payload = await fetchTableRows(table);
+    const store = {};
+
+    (payload.rows || []).forEach((row) => {
+      const partnerKey = String(row.partner_key || "all").trim() || "all";
+      const monthLabel = String(row.month_label || "").trim();
+      if (!monthLabel) return;
+      store[healthMonthStatusStorageKey(partnerKey, monthLabel)] =
+        row.status === "debited" ? "debited" : "pending";
+    });
+
+    return store;
+  }
+
+  async function saveCreditHealthMonthStatus(partnerKey, monthLabel, status) {
+    const client = getClient();
+    const table = config.creditHealthMonthStatusTable || "credit_health_month_status";
+    if (!client || !table) {
+      throw new Error("Credit health month status table is not configured.");
+    }
+
+    const partner = String(partnerKey || "all").trim() || "all";
+    const month = String(monthLabel || "").trim();
+    if (!month) {
+      throw new Error("Month label is required.");
+    }
+
+    const normalizedStatus = status === "debited" ? "debited" : "pending";
+
+    const { data: sessionData, error: sessionError } = await client.auth.getSession();
+    if (sessionError || !sessionData.session?.user) {
+      throw new Error("Sign in before saving month status.");
+    }
+
+    const { error } = await client.from(table).upsert(
+      {
+        partner_key: partner,
+        month_label: month,
+        status: normalizedStatus,
+        updated_at: new Date().toISOString(),
+        updated_by: sessionData.session.user.id
+      },
+      { onConflict: "partner_key,month_label" }
+    );
+
+    if (error) {
+      throw new Error(error.message || "Could not save month status.");
+    }
+
+    return {
+      partnerKey: partner,
+      monthLabel: month,
+      status: normalizedStatus
+    };
   }
 
   function uploadPartnerKey(upload) {
@@ -2242,10 +2413,14 @@
     syncCpContacts,
     saveCpContactsToSupabase,
     fetchCpContactsFromTable,
+    upsertCpContact,
+    deleteCpContact,
     getCreditUsageLogs,
     getPartnerCreditBalances,
     getCreditsUserLimitRows,
     saveCreditsUserLimitRows,
+    getCreditHealthMonthStatuses,
+    saveCreditHealthMonthStatus,
     getLatestProjectReportRows,
     getLatestAdminLogReportRows,
     getCreditUploadSummary,

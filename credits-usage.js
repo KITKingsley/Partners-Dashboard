@@ -25,8 +25,11 @@
     uploadHistory: [],
     healthMonthGroups: [],
     showAllHealthMonths: false,
+    healthMonthStatusesReady: false,
     data: emptyData()
   };
+
+  let healthMonthStatusCache = null;
 
   const els = {
     totalAllocated: document.querySelector("#creditsTotalAllocated"),
@@ -1354,10 +1357,44 @@
   }
 
   function readHealthMonthStatusStore() {
+    if (healthMonthStatusCache) return { ...healthMonthStatusCache };
+
     try {
-      return JSON.parse(localStorage.getItem(HEALTH_MONTH_STATUS_KEY) || "{}");
+      healthMonthStatusCache = JSON.parse(localStorage.getItem(HEALTH_MONTH_STATUS_KEY) || "{}");
     } catch {
-      return {};
+      healthMonthStatusCache = {};
+    }
+
+    return { ...healthMonthStatusCache };
+  }
+
+  function writeHealthMonthStatusStore(store) {
+    healthMonthStatusCache = { ...store };
+    try {
+      localStorage.setItem(HEALTH_MONTH_STATUS_KEY, JSON.stringify(healthMonthStatusCache));
+    } catch {
+      // Ignore storage quota errors.
+    }
+  }
+
+  async function hydrateHealthMonthStatuses() {
+    if (!window.DashboardAuth?.getCreditHealthMonthStatuses) {
+      state.healthMonthStatusesReady = true;
+      return;
+    }
+
+    try {
+      const remote = await window.DashboardAuth.getCreditHealthMonthStatuses();
+      if (remote && Object.keys(remote).length) {
+        writeHealthMonthStatusStore({
+          ...readHealthMonthStatusStore(),
+          ...remote
+        });
+      }
+    } catch (error) {
+      console.warn("Could not load month status from Supabase:", error);
+    } finally {
+      state.healthMonthStatusesReady = true;
     }
   }
 
@@ -1371,7 +1408,13 @@
     const partnerKey = healthMonthStatusPartnerKey(partnerFilter);
     const store = readHealthMonthStatusStore();
     store[healthMonthStatusStorageKey(partnerKey, monthLabel)] = status === "debited" ? "debited" : "pending";
-    localStorage.setItem(HEALTH_MONTH_STATUS_KEY, JSON.stringify(store));
+    writeHealthMonthStatusStore(store);
+
+    if (window.DashboardAuth?.saveCreditHealthMonthStatus) {
+      window.DashboardAuth.saveCreditHealthMonthStatus(partnerKey, monthLabel, status).catch((error) => {
+        console.warn("Could not save month status to Supabase:", error);
+      });
+    }
   }
 
   function renderHealthMonthStatusControl(group, partnerFilter) {
@@ -1822,6 +1865,12 @@
     (data.projectReportRows || []).forEach((row) => {
       if (row.cp) partners.add(partnerDisplayLabel(row.cp));
     });
+    Object.keys(window.DASHBOARD_DATA?.partnersByOrganization || {}).forEach((name) => {
+      if (name) partners.add(name);
+    });
+    if (window.PartnersView?.getPartnerNames) {
+      window.PartnersView.getPartnerNames().forEach((name) => partners.add(name));
+    }
     return [...partners].filter(Boolean).sort();
   }
 
@@ -1846,15 +1895,17 @@
     const balanceRows = data.partnerBalanceRows || [];
     const monthFilter = state.month;
 
-    return allPartnerNames(data).map((partner) => {
-      const allocated = partnerAllocatedAmount(data.transactions, partner, monthFilter);
-      const remaining = partnerRemainingBalance(data.transactions, balanceRows, partner);
-      const remainingPct = allocated > 0
-        ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
-        : null;
+    return allPartnerNames(data)
+      .map((partner) => {
+        const allocated = partnerAllocatedAmount(data.transactions, partner, monthFilter);
+        const remaining = partnerRemainingBalance(data.transactions, balanceRows, partner);
+        const remainingPct = allocated > 0
+          ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
+          : null;
 
-      return { partner, allocated, remaining, remainingPct };
-    });
+        return { partner, allocated, remaining, remainingPct };
+      })
+      .filter((row) => row.allocated > 0);
   }
 
   function overviewRemainingTone(remainingPct) {
@@ -2828,10 +2879,12 @@
     state.projectUploadCount = 0;
     state.adminLogUploadCount = 0;
     state.uploadHistory = [];
+    state.healthMonthStatusesReady = false;
     render();
 
     let logRows = [];
     let balanceRows = [];
+    const statusPromise = hydrateHealthMonthStatuses();
 
     try {
       const logsPayload = await window.DashboardAuth.getCreditUsageLogs();
@@ -2903,6 +2956,7 @@
       state.projectReportError = error.message || "Could not load project statistics from Supabase.";
       console.warn("Could not load project statistics:", error);
     } finally {
+      await statusPromise;
       state.projectLoading = false;
       render();
     }
@@ -3200,6 +3254,12 @@
     return [...names].filter(Boolean).sort((a, b) => a.localeCompare(b));
   }
 
+  function refreshPartnerOptions() {
+    cpPartnerNamesCache = null;
+    cpPartnerNamesPromise = null;
+    populateFilters();
+  }
+
   async function loadPartnerOptions() {
     if (cpPartnerNamesCache) return cpPartnerNamesCache;
 
@@ -3428,6 +3488,7 @@
   window.CreditsUsage = {
     render,
     populateFilters,
+    refreshPartnerOptions,
     hydrate: hydrateFromSupabase,
     applySearch(query) {
       state.search = String(query || "");
@@ -3463,5 +3524,6 @@
   };
 
   bindEvents();
+  window.addEventListener("dashboard-partners-changed", refreshPartnerOptions);
   hydrateFromSupabase();
 }());

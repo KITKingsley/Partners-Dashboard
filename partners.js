@@ -101,13 +101,15 @@
   const state = {
     partners: [],
     cpRows: [],
+    dbIdsByOrganization: {},
     columns: [],
     search: "",
     editingId: null,
     draft: null,
     sortKey: "Status",
     sortDirection: "asc",
-    supabaseLoaded: false
+    supabaseLoaded: false,
+    saving: false
   };
 
   const els = {
@@ -455,6 +457,78 @@
     return { ...bundled, ...edits };
   }
 
+  function partnerDbId(organization) {
+    const canonical = canonicalOrganizationName(organization);
+    return state.dbIdsByOrganization[canonical]
+      || state.dbIdsByOrganization[organization]
+      || null;
+  }
+
+  function rememberPartnerDbId(organization, dbId, previousOrganization = "") {
+    if (!organization || !dbId) return;
+
+    state.dbIdsByOrganization[organization] = dbId;
+    const canonical = canonicalOrganizationName(organization);
+    if (canonical !== organization) {
+      state.dbIdsByOrganization[canonical] = dbId;
+    }
+
+    const previous = String(previousOrganization || "").trim();
+    if (previous && previous !== organization) {
+      delete state.dbIdsByOrganization[previous];
+      const previousCanonical = canonicalOrganizationName(previous);
+      if (previousCanonical !== previous) {
+        delete state.dbIdsByOrganization[previousCanonical];
+      }
+    }
+  }
+
+  function partnerToCpRow(partner) {
+    return {
+      Organization: partner.organization,
+      "CP name": partner.organization,
+      ...(partner.fields || {})
+    };
+  }
+
+  function notifyPartnersChanged() {
+    syncDashboardPartners();
+    window.dispatchEvent(new CustomEvent("dashboard-partners-changed"));
+    window.CreditsUsage?.refreshPartnerOptions?.();
+  }
+
+  async function persistPartnerToSupabase(partner, options = {}) {
+    if (!window.DashboardAuth?.upsertCpContact) {
+      throw new Error("Sign in to save partners to Supabase.");
+    }
+
+    const result = await window.DashboardAuth.upsertCpContact(partnerToCpRow(partner), {
+      id: partner.dbId || partnerDbId(partner.organization),
+      previousOrganization: options.previousOrganization || ""
+    });
+
+    if (result?.id) {
+      partner.dbId = result.id;
+      rememberPartnerDbId(partner.organization, result.id, options.previousOrganization);
+    }
+
+    return result;
+  }
+
+  async function removePartnerFromSupabase(partner) {
+    if (!window.DashboardAuth?.deleteCpContact) {
+      throw new Error("Sign in to delete partners from Supabase.");
+    }
+
+    const dbId = partner.dbId || partnerDbId(partner.organization);
+    if (dbId) {
+      await window.DashboardAuth.deleteCpContact({ id: dbId });
+      return;
+    }
+
+    await window.DashboardAuth.deleteCpContact({ organization: partner.organization });
+  }
+
   function syncDashboardPartners() {
     if (!window.DASHBOARD_DATA) return;
 
@@ -465,7 +539,7 @@
 
   function mergePartners() {
     state.columns = discoverColumns(state.cpRows);
-    const edits = readEdits();
+    const edits = state.supabaseLoaded ? {} : readEdits();
     const grouped = groupCpRowsByOrganization(state.cpRows);
 
     Object.entries(sourcePartners()).forEach(([organization, meta]) => {
@@ -484,27 +558,34 @@
       });
     });
 
-    Object.entries(edits).forEach(([organization, fields]) => {
-      const canonical = canonicalOrganizationName(organization);
-      if (!grouped.has(canonical)) {
-        grouped.set(canonical, { organization: canonical, fields: {} });
-      }
-      grouped.get(canonical).fields = collapseDuplicateFields({
-        ...grouped.get(canonical).fields,
-        ...fields
+    if (!state.supabaseLoaded) {
+      Object.entries(edits).forEach(([organization, fields]) => {
+        const canonical = canonicalOrganizationName(organization);
+        if (!grouped.has(canonical)) {
+          grouped.set(canonical, { organization: canonical, fields: {} });
+        }
+        grouped.get(canonical).fields = collapseDuplicateFields({
+          ...grouped.get(canonical).fields,
+          ...fields
+        });
       });
-    });
+    }
 
     state.partners = [...grouped.values()]
-      .filter((entry) => !readDeletedPartners().has(canonicalOrganizationName(entry.organization)))
+      .filter((entry) => (
+        state.supabaseLoaded
+          ? true
+          : !readDeletedPartners().has(canonicalOrganizationName(entry.organization))
+      ))
       .map((entry) => ({
-      id: slugify(entry.organization),
-      organization: entry.organization,
-      fields: collapseDuplicateFields({
-        ...entry.fields,
-        ...(edits[entry.organization] || {})
-      })
-    }));
+        id: slugify(entry.organization),
+        organization: entry.organization,
+        dbId: partnerDbId(entry.organization),
+        fields: collapseDuplicateFields({
+          ...entry.fields,
+          ...(state.supabaseLoaded ? {} : (edits[entry.organization] || {}))
+        })
+      }));
 
     syncDashboardPartners();
   }
@@ -749,7 +830,10 @@
     try {
       const payload = await window.DashboardAuth.getCpContacts();
       state.cpRows = payload?.rows || [];
+      state.dbIdsByOrganization = payload?.dbIdsByOrganization || {};
       state.supabaseLoaded = true;
+
+      mergePartners();
 
       if (!state.columns.includes(state.sortKey)
         && state.sortKey !== "organization"
@@ -757,22 +841,19 @@
         state.sortKey = state.columns.includes(statusColumnKey()) ? statusColumnKey() : "organization";
       }
 
-      mergePartners();
-      const sourceLabel = payload?.source === "apps_script"
-        ? "Google Sheet sync"
-        : payload?.source === "cp_contacts_table"
-          ? "Supabase cp_contacts"
-          : payload?.source || "Supabase";
-      const syncNote = payload?.synced_at
-        ? ` Last synced ${window.DashboardDateFormat?.formatUploadTimestampLocal(payload.synced_at) || payload.synced_at}.`
+      syncDashboardPartners();
+      notifyPartnersChanged();
+
+      const updatedNote = payload?.updated_at
+        ? ` Last updated ${window.DashboardDateFormat?.formatUploadTimestampLocal(payload.updated_at) || payload.updated_at}.`
         : "";
       const warningNote = payload?.warning ? ` ${payload.warning}` : "";
 
       setStatus(
-        state.cpRows.length
-          ? `Loaded ${state.cpRows.length} partner row(s) from ${sourceLabel} (${state.columns.length} columns).${syncNote}${warningNote}`
-          : "No partner rows returned from Supabase.",
-        state.cpRows.length ? "is-success" : ""
+        state.partners.length
+          ? `Loaded ${state.partners.length} partner row(s) from Supabase (${state.columns.length} columns).${updatedNote}${warningNote}`
+          : "No partner rows found in Supabase.",
+        state.partners.length ? "is-success" : ""
       );
       render();
     } catch (error) {
@@ -782,23 +863,31 @@
     }
   }
 
-  function savePartnerInlineField(partnerId, columnKey, value, successMessage = "Saved.") {
+  async function savePartnerInlineField(partnerId, columnKey, value, successMessage = "Saved.") {
     const partner = state.partners.find((item) => item.id === partnerId);
-    if (!partner) return;
+    if (!partner || state.saving) return;
 
     const text = String(value || "").trim();
     if ((partner.fields[columnKey] || "") === text) return;
 
-    const edits = readEdits();
-    edits[partner.organization] = {
-      ...partnerFieldsForEdits(partner.organization),
-      [columnKey]: text
-    };
-
-    writeEdits(edits);
+    const previousValue = partner.fields[columnKey] || "";
     partner.fields[columnKey] = text;
     syncDashboardPartners();
-    setStatus(successMessage, "is-success");
+    setStatus("Saving…");
+
+    state.saving = true;
+    try {
+      await persistPartnerToSupabase(partner);
+      notifyPartnersChanged();
+      setStatus(successMessage, "is-success");
+    } catch (error) {
+      partner.fields[columnKey] = previousValue;
+      syncDashboardPartners();
+      setStatus(error.message || "Could not save partner.", "is-error");
+      render();
+    } finally {
+      state.saving = false;
+    }
   }
 
   function savePartnerNote(partnerId, noteValue) {
@@ -830,8 +919,8 @@
     render();
   }
 
-  function savePartner() {
-    if (!state.draft) return;
+  async function savePartner() {
+    if (!state.draft || state.saving) return;
 
     const organization = canonicalOrganizationName(String(state.draft.organization || "").trim());
     if (!organization) {
@@ -839,10 +928,16 @@
       return;
     }
 
-    const edits = readEdits();
     const existing = state.partners.find((partner) => partner.id === state.editingId);
-    if (existing && existing.organization !== organization) {
-      delete edits[existing.organization];
+    const previousOrganization = existing?.organization || "";
+    const isNewPartner = !existing;
+    const duplicate = state.partners.find((partner) => (
+      partner.organization === organization && partner.id !== state.editingId
+    ));
+
+    if (duplicate) {
+      setStatus("A partner with that organization name already exists.", "is-error");
+      return;
     }
 
     const savedFields = {};
@@ -850,36 +945,74 @@
       savedFields[column] = String(state.draft.fields?.[column] || "").trim();
     });
 
-    edits[organization] = collapseDuplicateFields(savedFields);
-    writeEdits(edits);
-    state.editingId = null;
-    state.draft = null;
-    mergePartners();
-    setStatus("Partner saved.", "is-success");
-    render();
-  }
+    const partner = {
+      id: slugify(organization),
+      organization,
+      dbId: existing?.dbId || partnerDbId(previousOrganization || organization) || null,
+      fields: collapseDuplicateFields(savedFields)
+    };
 
-  function deletePartner(partner) {
-    const name = partner.organization;
-    if (!window.confirm(`Remove ${name} from this dashboard view?`)) return;
+    setStatus("Saving partner…");
+    state.saving = true;
 
-    const deleted = readDeletedPartners();
-    deleted.add(canonicalOrganizationName(name));
-    writeDeletedPartners(deleted);
+    try {
+      await persistPartnerToSupabase(partner, { previousOrganization });
 
-    const edits = readEdits();
-    delete edits[name];
-    delete edits[canonicalOrganizationName(name)];
-    writeEdits(edits);
+      if (isNewPartner) {
+        state.cpRows.push(partnerToCpRow(partner));
+      } else {
+        state.cpRows = state.cpRows.map((row) => {
+          const rowOrg = canonicalOrganizationName(organizationFromCpRow(row));
+          if (rowOrg !== canonicalOrganizationName(previousOrganization || organization)) return row;
+          return partnerToCpRow(partner);
+        });
+      }
 
-    if (state.editingId === partner.id) {
       state.editingId = null;
       state.draft = null;
+      mergePartners();
+      notifyPartnersChanged();
+      setStatus(isNewPartner ? "Partner added." : "Partner saved.", "is-success");
+      render();
+    } catch (error) {
+      setStatus(error.message || "Could not save partner.", "is-error");
+    } finally {
+      state.saving = false;
     }
+  }
 
-    mergePartners();
-    setStatus(`${name} removed.`, "is-success");
-    render();
+  async function deletePartner(partner) {
+    const name = partner.organization;
+    if (!window.confirm(`Remove ${name} from Supabase?`)) return;
+    if (state.saving) return;
+
+    setStatus("Deleting partner…");
+    state.saving = true;
+
+    try {
+      await removePartnerFromSupabase(partner);
+
+      const canonical = canonicalOrganizationName(name);
+      state.cpRows = state.cpRows.filter((row) => (
+        canonicalOrganizationName(organizationFromCpRow(row)) !== canonical
+      ));
+      delete state.dbIdsByOrganization[name];
+      delete state.dbIdsByOrganization[canonical];
+
+      if (state.editingId === partner.id) {
+        state.editingId = null;
+        state.draft = null;
+      }
+
+      mergePartners();
+      notifyPartnersChanged();
+      setStatus(`${name} removed.`, "is-success");
+      render();
+    } catch (error) {
+      setStatus(error.message || "Could not delete partner.", "is-error");
+    } finally {
+      state.saving = false;
+    }
   }
 
   function addPartner() {
@@ -1110,7 +1243,7 @@
       const action = button.dataset.action;
       if (action === "save") {
         syncDraftFromInputs();
-        savePartner();
+        void savePartner();
         return;
       }
 
@@ -1127,20 +1260,20 @@
 
       if (action === "delete") {
         const partner = state.partners.find((item) => item.id === button.dataset.id);
-        if (partner) deletePartner(partner);
+        if (partner) void deletePartner(partner);
       }
     });
 
     els.tableBody?.addEventListener("blur", (event) => {
       const noteTextarea = event.target.closest(".partners-note-inline");
       if (noteTextarea) {
-        savePartnerNote(noteTextarea.dataset.partnerId, noteTextarea.value);
+        void savePartnerNote(noteTextarea.dataset.partnerId, noteTextarea.value);
         return;
       }
 
       const dateTextarea = event.target.closest(".partners-date-inline");
       if (dateTextarea) {
-        savePartnerInlineField(
+        void savePartnerInlineField(
           dateTextarea.dataset.partnerId,
           dateTextarea.dataset.column,
           dateTextarea.value,
@@ -1180,7 +1313,7 @@
     els.tableBody?.addEventListener("change", (event) => {
       const creditSelect = event.target.closest(".partners-credit-accounting-inline");
       if (creditSelect && !creditSelect.closest(".is-editing")) {
-        savePartnerCreditAccounting(creditSelect.dataset.partnerId, creditSelect.value);
+        void savePartnerCreditAccounting(creditSelect.dataset.partnerId, creditSelect.value);
         return;
       }
 

@@ -12,5 +12,6 @@ window.DASHBOARD_AUTH_CONFIG = {
   creditReportUploadsTable: "credit_report_uploads",
   creditReportRowsTable: "credit_report_rows",
   creditsUserLimitTable: "credits_user_limit",
+  creditHealthMonthStatusTable: "credit_health_month_status",
   cpContactsTable: "cp_contacts"
 };
