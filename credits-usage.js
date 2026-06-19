@@ -70,6 +70,8 @@
 
   let selectedUploadPartner = "";
   let selectedReportUpload = null;
+  let creditsHydrated = false;
+  let creditsHydratePromise = null;
 
   const numberFmt = new Intl.NumberFormat("en-US");
   const creditMoneyFmt = new Intl.NumberFormat("en-US", {
@@ -1826,11 +1828,68 @@
         partnersMatch(entry.partner, state.partner) || partnersMatch(entry.name, state.partner)
       );
     }
+
+    const query = creditsSearchQuery();
+    if (query) {
+      health = health.filter((entry) => partnerHealthEntryMatchesCreditsSearch(entry, query));
+    }
+
     return health;
   }
 
   function getData() {
     return state.data;
+  }
+
+  function creditsSearchQuery() {
+    return state.search.trim().toLowerCase();
+  }
+
+  function textMatchesCreditsSearch(value, query = creditsSearchQuery()) {
+    if (!query) return true;
+    return String(value || "").toLowerCase().includes(query);
+  }
+
+  function transactionMatchesCreditsSearch(row, query = creditsSearchQuery()) {
+    if (!query) return true;
+
+    return [
+      row.month,
+      row.date,
+      row.description,
+      row.cpPartner,
+      partnerDisplayLabel(row.cpPartner),
+      row.actions,
+      row.amountDisplay
+    ].some((value) => textMatchesCreditsSearch(value, query));
+  }
+
+  function partnerOverviewMatchesCreditsSearch(row, query = creditsSearchQuery()) {
+    if (!query) return true;
+    return textMatchesCreditsSearch(row.partner, query);
+  }
+
+  function projectHealthRowMatchesCreditsSearch(row, query = creditsSearchQuery()) {
+    if (!query) return true;
+
+    return [
+      row.projectId,
+      row.title,
+      row.cpName,
+      row.monthLabel,
+      row.waiverKey,
+      ...(row.cells || [])
+    ].some((value) => textMatchesCreditsSearch(value, query));
+  }
+
+  function partnerHealthEntryMatchesCreditsSearch(entry, query = creditsSearchQuery()) {
+    if (!query) return true;
+
+    return [
+      entry.name,
+      entry.partner,
+      entry.detail
+    ].some((value) => textMatchesCreditsSearch(value, query));
   }
 
   function formatCredits(value) {
@@ -1891,21 +1950,53 @@
       .reduce((sum, row) => sum + row.amount, 0);
   }
 
+  function partnerHasCreditOverviewData(data, partner) {
+    if ((data.transactions || []).some((row) => partnersMatch(row.cpPartner, partner))) return true;
+    if ((data.projectReportRows || []).some((row) => partnersMatch(row.cp, partner))) return true;
+    if ((data.adminLogReportRows || []).some((row) => partnersMatch(row.cp, partner))) return true;
+    if ((data.partnerBalanceRows || []).some((row) => {
+      const name = String(pick(row, ["partner", "Partner", "cp_partner", "cpPartner"], "")).trim();
+      return name && partnersMatch(name, partner);
+    })) return true;
+    if ((state.uploadHistory || []).some((entry) => entry.cp && partnersMatch(entry.cp, partner))) return true;
+    return false;
+  }
+
+  function shouldShowPartnerOverviewRow(data, row) {
+    if (row.allocated > 0) return true;
+    if (Math.abs(row.remaining) > 0.001) return true;
+    return partnerHasCreditOverviewData(data, row.partner);
+  }
+
+  function partnerOverviewMetrics(transactions, balanceRows, partner) {
+    const credit = partnerCreditFromLogs(transactions, partner, balanceRows);
+    let allocated = credit.allocated;
+    let remaining = credit.remaining;
+
+    const balanceRow = balanceRowForPartner(balanceRows, partner);
+    if (balanceRow) {
+      const balanceAllocated = toNumber(pick(balanceRow, ["credits_allocated", "creditsAllocated", "allocated"], 0));
+      const balanceRemaining = toNumber(pick(balanceRow, ["credits_remaining", "creditsRemaining", "remaining"], 0));
+      if (allocated <= 0 && balanceAllocated > 0) allocated = balanceAllocated;
+      if (remaining === 0 && balanceRemaining !== 0) remaining = balanceRemaining;
+    }
+
+    const remainingPct = allocated > 0
+      ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
+      : null;
+
+    return { allocated, remaining, remainingPct };
+  }
+
   function buildPartnerOverviewRows(data) {
     const balanceRows = data.partnerBalanceRows || [];
-    const monthFilter = state.month;
 
     return allPartnerNames(data)
-      .map((partner) => {
-        const allocated = partnerAllocatedAmount(data.transactions, partner, monthFilter);
-        const remaining = partnerRemainingBalance(data.transactions, balanceRows, partner);
-        const remainingPct = allocated > 0
-          ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
-          : null;
-
-        return { partner, allocated, remaining, remainingPct };
-      })
-      .filter((row) => row.allocated > 0);
+      .map((partner) => ({
+        partner,
+        ...partnerOverviewMetrics(data.transactions, balanceRows, partner)
+      }))
+      .filter((row) => shouldShowPartnerOverviewRow(data, row));
   }
 
   function overviewRemainingTone(remainingPct) {
@@ -1924,9 +2015,12 @@
       return;
     }
 
-    const rows = buildPartnerOverviewRows(data);
+    const rows = buildPartnerOverviewRows(data).filter(partnerOverviewMatchesCreditsSearch);
     if (!rows.length) {
-      els.partnerOverviewBody.innerHTML = '<tr><td colspan="4" class="empty">No partner credit data yet. Upload credit logs to populate this overview.</td></tr>';
+      const message = creditsSearchQuery()
+        ? "No partners match your search."
+        : "No partner credit data yet. Upload credit logs to populate this overview.";
+      els.partnerOverviewBody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(message)}</td></tr>`;
       if (els.partnerOverviewFoot) els.partnerOverviewFoot.innerHTML = "";
       return;
     }
@@ -2011,20 +2105,11 @@
   }
 
   function transactionsMatchingFilters(data, includeSearch = false) {
-    const query = includeSearch ? state.search.trim().toLowerCase() : "";
-
     return data.transactions.filter((row) => {
       if (state.month !== "all" && row.month !== state.month) return false;
       if (state.partner !== "all" && !partnersMatch(row.cpPartner, state.partner)) return false;
-      if (!query) return true;
-
-      return [
-        row.month,
-        row.description,
-        row.cpPartner,
-        partnerDisplayLabel(row.cpPartner),
-        row.actions
-      ].some((value) => String(value).toLowerCase().includes(query));
+      if (includeSearch && !transactionMatchesCreditsSearch(row)) return false;
+      return true;
     });
   }
 
@@ -2493,13 +2578,24 @@
     const previewNote = table.previewNote
       ? `<p class="credits-project-stats-meta credits-project-stats-preview">${escapeHtml(table.previewNote)}</p>`
       : "";
-    const monthGroups = groupHealthRowsByMonth(table.rows);
+    const query = creditsSearchQuery();
+    const filteredRows = query
+      ? table.rows.filter((row) => projectHealthRowMatchesCreditsSearch(row, query))
+      : table.rows;
+
+    if (!filteredRows.length) {
+      return query
+        ? '<p class="empty">No projects match your search.</p>'
+        : "";
+    }
+
+    const monthGroups = groupHealthRowsByMonth(filteredRows);
     const expectedMonths = table.evaluationMonths?.length
       ? table.evaluationMonths
       : monthGroups.map((group) => group.monthLabel);
     const partnerHint = partnerFilter !== "all"
       ? partnerFilter
-      : (table.rows[0]?.cpName || table.rows[0]?.cells?.[0] || "");
+      : (filteredRows[0]?.cpName || filteredRows[0]?.cells?.[0] || "");
     state.healthMonthGroups = fillEmptyHealthMonthGroups(monthGroups, expectedMonths, partnerHint);
 
     const visibleLimit = state.showAllHealthMonths
@@ -2733,9 +2829,11 @@
     if (!pageRows.length) {
       const message = state.loadError
         ? state.loadError
-        : data.transactions.length
-          ? "No history matches your filters."
-          : "No credit transaction history yet. Upload credit logs to populate this table.";
+        : creditsSearchQuery()
+          ? "No transactions match your search."
+          : data.transactions.length
+            ? "No history matches your filters."
+            : "No credit transaction history yet. Upload credit logs to populate this table.";
       els.historyTableBody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(message)}</td></tr>`;
       renderPagination(0);
       return;
@@ -2865,7 +2963,29 @@
     renderUploadHistory();
   }
 
-  async function hydrateFromSupabase() {
+  function applyCreditsSearch() {
+    state.page = 1;
+    const data = getData();
+    renderPartnerOverview(data);
+    renderHistory(data);
+    renderHealth(data);
+  }
+
+  async function hydrateFromSupabase(options = {}) {
+    if (creditsHydrated && !options.force) {
+      render();
+      return creditsHydratePromise;
+    }
+
+    if (creditsHydratePromise && !options.force) {
+      return creditsHydratePromise;
+    }
+
+    creditsHydratePromise = hydrateFromSupabaseInternal(options);
+    return creditsHydratePromise;
+  }
+
+  async function hydrateFromSupabaseInternal(options = {}) {
     if (!window.DashboardAuth?.getCreditUsageLogs) {
       state.loadError = "Supabase credit usage is not configured.";
       render();
@@ -2958,6 +3078,7 @@
     } finally {
       await statusPromise;
       state.projectLoading = false;
+      creditsHydrated = true;
       render();
     }
   }
@@ -2965,9 +3086,12 @@
   function bindEvents() {
     els.searchInput?.addEventListener("input", () => {
       state.search = els.searchInput.value;
-      state.page = 1;
-      const data = getData();
-      renderHistory(data);
+      applyCreditsSearch();
+    });
+
+    els.searchInput?.addEventListener("search", () => {
+      state.search = els.searchInput.value;
+      applyCreditsSearch();
     });
 
     els.monthFilter?.addEventListener("change", () => {
@@ -3493,8 +3617,7 @@
     applySearch(query) {
       state.search = String(query || "");
       if (els.searchInput) els.searchInput.value = state.search;
-      state.page = 1;
-      renderHistory(getData());
+      applyCreditsSearch();
     },
     searchIndex(query) {
       const q = String(query || "").trim().toLowerCase();
