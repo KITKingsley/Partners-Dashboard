@@ -1541,7 +1541,7 @@
   }
 
   async function refreshLastUploadedDate() {
-    if (!els.uploadLastUploadedDate || els.uploadPanel?.hidden) return;
+    if (!els.uploadLastUploadedDate) return;
 
     try {
       const uploadedAt = window.DashboardAuth?.getLastStripeUploadDate
@@ -1625,13 +1625,13 @@
       const email = String(data.user.email || "").trim().toLowerCase();
       const domain = email.includes("@") ? email.split("@").pop() : "";
       const canUpload = domain === "gametize.com";
-      els.uploadPanel.hidden = !canUpload;
       els.uploadPanel.classList.toggle("can-upload", canUpload);
+      window.DashboardNav?.syncUploadPanelVisibility?.();
       if (canUpload) await refreshLastUploadedDate();
       return canUpload;
     } catch {
-      els.uploadPanel.hidden = true;
       els.uploadPanel.classList.remove("can-upload");
+      window.DashboardNav?.syncUploadPanelVisibility?.();
       return false;
     }
   }

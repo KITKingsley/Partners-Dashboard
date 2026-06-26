@@ -8,11 +8,21 @@
   };
 
   const navButtons = [...document.querySelectorAll("[data-dashboard-view]")];
+  const uploadPanel = document.querySelector("#uploadPanel");
   const sidebarUserName = document.querySelector("#sidebarUserName");
   const sidebarUserRole = document.querySelector("#sidebarUserRole");
   const sidebarUserInitials = document.querySelector("#sidebarUserInitials");
 
+  let activeView = "dashboard";
+
+  function syncUploadPanelVisibility() {
+    if (!uploadPanel) return;
+    const show = activeView === "dashboard" && uploadPanel.classList.contains("can-upload");
+    uploadPanel.hidden = !show;
+  }
+
   function setActiveView(viewName) {
+    activeView = viewName;
     Object.entries(views).forEach(([name, section]) => {
       if (!section) return;
       section.hidden = name !== viewName;
@@ -44,6 +54,8 @@
     if (window.location.hash !== hash) {
       window.history.replaceState({}, document.title, `${window.location.pathname}${hash}`);
     }
+
+    syncUploadPanelVisibility();
   }
 
   function initialsFromEmail(email) {
@@ -90,5 +102,5 @@
   setActiveView(initialView);
   hydrateSidebarUser();
 
-  window.DashboardNav = { setActiveView };
+  window.DashboardNav = { setActiveView, syncUploadPanelVisibility };
 }());

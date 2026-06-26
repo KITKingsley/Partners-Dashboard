@@ -493,7 +493,7 @@ main .controls .cp-meta-value {
   display: none;
 }
 
-.upload-panel.can-upload {
+.upload-panel.can-upload:not([hidden]) {
   display: grid;
 }
 
