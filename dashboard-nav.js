@@ -50,6 +50,12 @@
       window.PlatformSettings.render();
     }
 
+    if (viewName === "dashboard" && window.DashboardApp?.render) {
+      requestAnimationFrame(() => {
+        window.DashboardApp.render();
+      });
+    }
+
     const hash = viewName === "dashboard" ? "" : `#${viewName}`;
     if (window.location.hash !== hash) {
       window.history.replaceState({}, document.title, `${window.location.pathname}${hash}`);

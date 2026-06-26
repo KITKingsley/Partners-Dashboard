@@ -1762,6 +1762,7 @@
   }
 
   window.DashboardApp = {
+    render,
     applySearch(query) {
       state.textSearch = String(query || "").trim().toLowerCase();
       render();
