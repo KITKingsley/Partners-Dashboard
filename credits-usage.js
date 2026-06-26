@@ -26,10 +26,14 @@
     healthMonthGroups: [],
     showAllHealthMonths: false,
     healthMonthStatusesReady: false,
+    partnerDetailLoaded: false,
     data: emptyData()
   };
 
   let healthMonthStatusCache = null;
+  const partnerScopeCache = new Map();
+  let partnerScopeLoadPromise = null;
+  let allPartnersLogRows = null;
 
   const els = {
     totalAllocated: document.querySelector("#creditsTotalAllocated"),
@@ -310,6 +314,179 @@
 
   function partnersMatch(left, right) {
     return partnerIdentityGroup(left) === partnerIdentityGroup(right);
+  }
+
+  function partnerScopeCacheKey(partner) {
+    const key = partnerIdentityGroup(partner) || normalizePartnerName(partner);
+    return key || String(partner || "").trim();
+  }
+
+  function getPartnerDbKeys(partner) {
+    const normalized = normalizePartnerName(partner);
+    if (!normalized) return [];
+
+    const group = PARTNER_IDENTITY_GROUPS.find((item) =>
+      normalizePartnerName(item.label) === normalized
+      || item.aliases.some((alias) => normalizePartnerName(alias) === normalized)
+    );
+
+    if (group) {
+      return [...new Set([group.label, ...group.aliases].map((value) => String(value || "").trim()).filter(Boolean))];
+    }
+
+    return [String(partner || "").trim()].filter(Boolean);
+  }
+
+  function clearPartnerScopedData() {
+    const balanceRows = state.data.partnerBalanceRows || [];
+    state.data = buildCreditsData(allPartnersLogRows || [], balanceRows, [], []);
+    state.projectUploadCount = 0;
+    state.adminLogUploadCount = 0;
+    state.projectReportError = "";
+    state.partnerDetailLoaded = false;
+  }
+
+  function invalidatePartnerScopeCache(partner) {
+    if (partner) {
+      partnerScopeCache.delete(partnerScopeCacheKey(partner));
+      return;
+    }
+    partnerScopeCache.clear();
+  }
+
+  async function loadPartnerScopedData(partner, options = {}) {
+    const partnerLabel = partnerDisplayLabel(partner) || String(partner || "").trim();
+    if (!partnerLabel) return;
+
+    const cacheKey = partnerScopeCacheKey(partnerLabel);
+    if (!options.force && partnerScopeCache.has(cacheKey)) {
+      const cached = partnerScopeCache.get(cacheKey);
+      state.data = buildCreditsData(
+        cached.logRows,
+        state.data.partnerBalanceRows || [],
+        cached.projectRows,
+        cached.adminLogRows
+      );
+      state.projectUploadCount = cached.projectUploadCount;
+      state.adminLogUploadCount = cached.adminLogUploadCount;
+      state.projectReportError = cached.projectReportError || "";
+      state.partnerDetailLoaded = true;
+      render();
+      return;
+    }
+
+    if (partnerScopeLoadPromise && !options.force) {
+      return partnerScopeLoadPromise;
+    }
+
+    partnerScopeLoadPromise = loadPartnerScopedDataInternal(partnerLabel, cacheKey, options);
+    try {
+      await partnerScopeLoadPromise;
+    } finally {
+      partnerScopeLoadPromise = null;
+    }
+  }
+
+  async function loadPartnerScopedDataInternal(partnerLabel, cacheKey, options = {}) {
+    const partnerKeys = getPartnerDbKeys(partnerLabel);
+    state.projectLoading = true;
+    state.projectReportError = "";
+    state.projectUploadCount = 0;
+    state.adminLogUploadCount = 0;
+    render();
+
+    let logRows = [];
+    let projectRows = [];
+    let adminLogRows = [];
+    let projectReportError = "";
+
+    try {
+      const requests = [];
+
+      if (window.DashboardAuth?.getCreditUsageLogs) {
+        requests.push(
+          window.DashboardAuth.getCreditUsageLogs({ partnerKeys })
+            .then((payload) => { logRows = payload.rows || []; })
+            .catch((error) => { throw error; })
+        );
+      }
+
+      if (window.DashboardAuth.getLatestProjectReportRows) {
+        requests.push(
+          window.DashboardAuth.getLatestProjectReportRows({ partnerKeys })
+            .then((projectPayload) => {
+              projectRows = projectPayload.rows || [];
+              state.projectUploadCount = projectPayload.uploads?.length || 0;
+              if (state.projectUploadCount && !projectRows.length) {
+                projectReportError = "Project report uploads were found but no Excel rows could be loaded. Re-upload the Project report.";
+              }
+            })
+            .catch((projectError) => {
+              projectReportError = projectError.message || "Could not load project statistics rows.";
+              console.warn("Could not load project statistics rows:", projectError);
+            })
+        );
+      } else {
+        projectReportError = "Project report loading is unavailable. Hard-refresh the page (Ctrl+Shift+R).";
+      }
+
+      if (window.DashboardAuth.getLatestAdminLogReportRows) {
+        requests.push(
+          window.DashboardAuth.getLatestAdminLogReportRows({ partnerKeys })
+            .then((adminPayload) => {
+              adminLogRows = adminPayload.rows || [];
+              state.adminLogUploadCount = adminPayload.uploads?.length || 0;
+            })
+            .catch((adminLogError) => {
+              console.warn("Could not load admin log rows:", adminLogError);
+            })
+        );
+      }
+
+      await Promise.all(requests);
+
+      state.projectReportError = projectReportError;
+      state.data = buildCreditsData(
+        logRows,
+        state.data.partnerBalanceRows || [],
+        projectRows,
+        adminLogRows
+      );
+      state.partnerDetailLoaded = true;
+
+      partnerScopeCache.set(cacheKey, {
+        logRows,
+        projectRows,
+        adminLogRows,
+        projectUploadCount: state.projectUploadCount,
+        adminLogUploadCount: state.adminLogUploadCount,
+        projectReportError
+      });
+    } catch (error) {
+      state.projectReportError = error.message || "Could not load partner credit usage data.";
+      console.warn("Could not load partner credit usage data:", error);
+    } finally {
+      state.projectLoading = false;
+      render();
+    }
+  }
+
+  async function applyPartnerFilter(partner) {
+    state.partner = partner;
+    state.showAllHealthMonths = false;
+    state.page = 1;
+    if (els.partnerFilter) els.partnerFilter.value = partner;
+
+    if (partner === "all") {
+      clearPartnerScopedData();
+      if (!allPartnersLogRows?.length && window.DashboardAuth?.getCreditUsageLogs) {
+        await loadPartnerOverviewData();
+      }
+      render();
+      return;
+    }
+
+    await loadPartnerScopedData(partner);
   }
 
   function partnerEvaluationStartMonth(cpName) {
@@ -1969,16 +2146,27 @@
   }
 
   function partnerOverviewMetrics(transactions, balanceRows, partner) {
+    const balanceRow = balanceRowForPartner(balanceRows, partner);
+    const hasPartnerLogs = (transactions || []).some((row) => partnersMatch(row.cpPartner, partner));
+
+    if (balanceRow && !hasPartnerLogs) {
+      const allocated = toNumber(pick(balanceRow, ["credits_allocated", "creditsAllocated", "allocated"], 0));
+      const remaining = toNumber(pick(balanceRow, ["credits_remaining", "creditsRemaining", "remaining"], 0));
+      const remainingPct = allocated > 0
+        ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
+        : null;
+      return { allocated, remaining, remainingPct };
+    }
+
     const credit = partnerCreditFromLogs(transactions, partner, balanceRows);
     let allocated = credit.allocated;
     let remaining = credit.remaining;
 
-    const balanceRow = balanceRowForPartner(balanceRows, partner);
     if (balanceRow) {
       const balanceAllocated = toNumber(pick(balanceRow, ["credits_allocated", "creditsAllocated", "allocated"], 0));
       const balanceRemaining = toNumber(pick(balanceRow, ["credits_remaining", "creditsRemaining", "remaining"], 0));
       if (allocated <= 0 && balanceAllocated > 0) allocated = balanceAllocated;
-      if (remaining === 0 && balanceRemaining !== 0) remaining = balanceRemaining;
+      if (!hasPartnerLogs || (remaining === 0 && balanceRemaining !== 0)) remaining = balanceRemaining;
     }
 
     const remainingPct = allocated > 0
@@ -1988,15 +2176,89 @@
     return { allocated, remaining, remainingPct };
   }
 
+  function balanceRowOverviewMetrics(row) {
+    const partner = partnerDisplayLabel(String(pick(row, ["partner", "Partner", "cp_partner", "cpPartner"], "")).trim());
+    if (!partner) return null;
+
+    const allocated = toNumber(pick(row, ["credits_allocated", "creditsAllocated", "allocated"], 0));
+    const remaining = toNumber(pick(row, ["credits_remaining", "creditsRemaining", "remaining"], 0));
+    const remainingPct = allocated > 0
+      ? Math.max(0, Math.min(100, Math.round((remaining / allocated) * 100)))
+      : null;
+
+    return { partner, allocated, remaining, remainingPct };
+  }
+
+  function balanceRowsNeedLogAggregation(balanceRows) {
+    if (!balanceRows.length) return true;
+    return balanceRows.some((row) =>
+      toNumber(pick(row, ["credits_allocated", "creditsAllocated", "allocated"], 0)) <= 0
+    );
+  }
+
+  function buildPartnerBalanceRowsFromLogs(logRows, existingBalanceRows = []) {
+    const transactions = (logRows || []).map(normalizeLogRow);
+    const byKey = new Map();
+
+    (existingBalanceRows || []).forEach((row) => {
+      const partner = String(pick(row, ["partner", "Partner", "cp_partner", "cpPartner"], "")).trim();
+      if (!partner) return;
+      byKey.set(partnerIdentityGroup(partner), { ...row, partner });
+    });
+
+    const partnersFromLogs = [...new Set(
+      transactions.map((row) => partnerDisplayLabel(row.cpPartner)).filter(Boolean)
+    )];
+
+    partnersFromLogs.forEach((partner) => {
+      const key = partnerIdentityGroup(partner);
+      const credit = partnerCreditFromLogs(transactions, partner, existingBalanceRows);
+      const existing = byKey.get(key);
+      const balanceAllocated = existing
+        ? toNumber(pick(existing, ["credits_allocated", "creditsAllocated", "allocated"], 0))
+        : 0;
+      const balanceRemaining = existing
+        ? toNumber(pick(existing, ["credits_remaining", "creditsRemaining", "remaining"], 0))
+        : 0;
+
+      byKey.set(key, {
+        partner: partnerDisplayLabel(partner),
+        credits_allocated: balanceAllocated > 0 ? balanceAllocated : credit.allocated,
+        credits_remaining: balanceRemaining !== 0 ? balanceRemaining : credit.remaining
+      });
+    });
+
+    return [...byKey.values()];
+  }
+
   function buildPartnerOverviewRows(data) {
     const balanceRows = data.partnerBalanceRows || [];
+    const transactions = data.transactions || [];
+    const byPartnerKey = new Map();
 
-    return allPartnerNames(data)
-      .map((partner) => ({
+    balanceRows.forEach((row) => {
+      const entry = balanceRowOverviewMetrics(row);
+      if (!entry) return;
+      byPartnerKey.set(partnerIdentityGroup(entry.partner), entry);
+    });
+
+    allPartnerNames(data).forEach((partner) => {
+      const key = partnerIdentityGroup(partner);
+      const hasPartnerLogs = transactions.some((row) => partnersMatch(row.cpPartner, partner));
+      if (byPartnerKey.has(key) && !hasPartnerLogs) return;
+
+      const row = {
         partner,
-        ...partnerOverviewMetrics(data.transactions, balanceRows, partner)
-      }))
-      .filter((row) => shouldShowPartnerOverviewRow(data, row));
+        ...partnerOverviewMetrics(transactions, balanceRows, partner)
+      };
+      if (!byPartnerKey.has(key) && !shouldShowPartnerOverviewRow(data, row)) return;
+      byPartnerKey.set(key, row);
+    });
+
+    const query = creditsSearchQuery();
+    return [...byPartnerKey.values()]
+      .filter((row) => partnerOverviewMatchesCreditsSearch(row, query))
+      .sort((a, b) => a.partner.localeCompare(b.partner));
   }
 
   function overviewRemainingTone(remainingPct) {
@@ -2017,7 +2279,9 @@
 
     const rows = buildPartnerOverviewRows(data);
     if (!rows.length) {
-      const message = "No partner credit data yet. Upload credit logs to populate this overview.";
+      const message = (data.partnerBalanceRows || []).length
+        ? "No partners match your search."
+        : "No partner credit balances found yet.";
       els.partnerOverviewBody.innerHTML = `<tr><td colspan="4" class="empty">${escapeHtml(message)}</td></tr>`;
       if (els.partnerOverviewFoot) els.partnerOverviewFoot.innerHTML = "";
       return;
@@ -2155,12 +2419,24 @@
           0
         );
       }
+    } else if (balanceRows.length) {
+      remainingBalance = balanceRows.reduce(
+        (sum, row) => sum + toNumber(pick(row, ["credits_remaining", "creditsRemaining", "remaining"], 0)),
+        0
+      );
     } else {
       const partnerNames = [...new Set(
         data.transactions.map((row) => partnerDisplayLabel(row.cpPartner)).filter(Boolean)
       )];
       remainingBalance = partnerNames.reduce(
         (sum, partner) => sum + partnerRemainingBalance(data.transactions, balanceRows, partner),
+        0
+      );
+    }
+
+    if (state.partner === "all" && state.month === "all" && !totalAllocated && balanceRows.length) {
+      totalAllocated = balanceRows.reduce(
+        (sum, row) => sum + toNumber(pick(row, ["credits_allocated", "creditsAllocated", "allocated"], 0)),
         0
       );
     }
@@ -2740,7 +3016,9 @@
 
     if (!healthRows.length) {
       let message = "No project statistics uploaded yet. Upload a Project report to see partner credit health.";
-      if (state.projectReportError) {
+      if (state.partner === "all" && !state.partnerDetailLoaded) {
+        message = "Select a partner to load project statistics and detailed partner credit health.";
+      } else if (state.projectReportError) {
         message = state.projectReportError;
       } else if (state.projectUploadCount > 0) {
         message = `Found ${state.projectUploadCount} project report upload(s) in Supabase but no row data was loaded. Try re-uploading the Project report for this partner.`;
@@ -2930,6 +3208,10 @@
     }
 
     if (!data.transactions.length && !data.partnerHealth.length && !data.projectReportRows?.length) {
+      if (state.partner === "all" && !state.partnerDetailLoaded && (state.uploadHistory.length || data.partnerBalanceRows?.length)) {
+        els.uploadStatus.textContent = "Partner overview loaded. Select a partner to load project statistics.";
+        return;
+      }
       els.uploadStatus.textContent = "Credit Usage reads from Supabase credit logs only — not Stripe or Xero.";
       return;
     }
@@ -2940,6 +3222,11 @@
     else if (state.projectUploadCount) parts.push(`${state.projectUploadCount} project upload(s) with 0 row(s)`);
     if (data.adminLogReportRows?.length) parts.push(`${data.adminLogReportRows.length} admin log row(s)`);
     else if (state.adminLogUploadCount) parts.push(`${state.adminLogUploadCount} admin log upload(s) with 0 row(s)`);
+    if (state.partner === "all" && !state.partnerDetailLoaded) {
+      const base = parts.length ? `Loaded ${parts.join(" and ")}. ` : "";
+      els.uploadStatus.textContent = `${base}Select a partner to load project statistics.`;
+      return;
+    }
     if (state.projectReportError && !data.projectReportRows?.length) {
       const base = parts.length ? `Loaded ${parts.join(" and ")}. ` : "";
       els.uploadStatus.textContent = `${base}${state.projectReportError}`;
@@ -2964,13 +3251,78 @@
   function applyCreditsSearch() {
     state.page = 1;
     const data = getData();
+    renderPartnerOverview(data);
     renderHistory(data);
     renderHealth(data);
   }
 
+  async function loadPartnerOverviewData() {
+    if (!window.DashboardAuth?.getPartnerCreditBalances) {
+      return 0;
+    }
+
+    let balanceRows = [];
+    try {
+      const balancesPayload = await window.DashboardAuth.getPartnerCreditBalances();
+      balanceRows = balancesPayload.rows || [];
+    } catch (balanceError) {
+      console.warn("Could not load partner credit balances:", balanceError);
+    }
+
+    let logRows = allPartnersLogRows;
+    const shouldFetchAllLogs = window.DashboardAuth?.getCreditUsageLogs
+      && (balanceRowsNeedLogAggregation(balanceRows) || !logRows);
+
+    if (shouldFetchAllLogs) {
+      try {
+        const logsPayload = await window.DashboardAuth.getCreditUsageLogs();
+        logRows = logsPayload.rows || [];
+        allPartnersLogRows = logRows;
+        if (balanceRowsNeedLogAggregation(balanceRows)) {
+          balanceRows = buildPartnerBalanceRowsFromLogs(logRows, balanceRows);
+        }
+      } catch (logSummaryError) {
+        console.warn("Could not load credit usage logs for overview:", logSummaryError);
+      }
+    }
+
+    state.data = buildCreditsData(
+      logRows || [],
+      balanceRows,
+      state.data.projectReportRows || [],
+      state.data.adminLogReportRows || []
+    );
+
+    if (window.DashboardAuth.getCreditUploadSummary) {
+      try {
+        state.uploadHistory = await window.DashboardAuth.getCreditUploadSummary();
+      } catch (uploadHistoryError) {
+        console.warn("Could not load upload history:", uploadHistoryError);
+      }
+    }
+
+    return balanceRows.length;
+  }
+
   async function hydrateFromSupabase(options = {}) {
+    if (options.force) {
+      creditsHydrated = false;
+      creditsHydratePromise = null;
+      invalidatePartnerScopeCache(options.partner);
+    }
+
     if (creditsHydrated && !options.force) {
       render();
+      if (
+        !(getData().partnerBalanceRows || []).length
+        || (state.partner === "all" && !allPartnersLogRows?.length)
+      ) {
+        await loadPartnerOverviewData();
+        render();
+      }
+      if (state.partner !== "all" && !state.partnerDetailLoaded) {
+        await loadPartnerScopedData(state.partner);
+      }
       return creditsHydratePromise;
     }
 
@@ -2997,27 +3349,21 @@
     state.adminLogUploadCount = 0;
     state.uploadHistory = [];
     state.healthMonthStatusesReady = false;
+    state.partnerDetailLoaded = false;
+    if (options.force) {
+      allPartnersLogRows = null;
+    }
     render();
 
-    let logRows = [];
-    let balanceRows = [];
     const statusPromise = hydrateHealthMonthStatuses();
 
     try {
-      const logsPayload = await window.DashboardAuth.getCreditUsageLogs();
-      logRows = logsPayload.rows || [];
-
-      try {
-        const balancesPayload = await window.DashboardAuth.getPartnerCreditBalances();
-        balanceRows = balancesPayload.rows || [];
-      } catch (balanceError) {
-        console.warn("Could not load partner credit balances:", balanceError);
-      }
-
-      state.data = buildCreditsData(logRows, balanceRows, [], []);
+      state.data = buildCreditsData([], [], [], []);
+      state.uploadHistory = [];
+      await loadPartnerOverviewData();
     } catch (error) {
       state.data = emptyData();
-      state.loadError = error.message || "Could not load credit usage logs from Supabase.";
+      state.loadError = error.message || "Could not load credit usage from Supabase.";
       state.loading = false;
       render();
       return;
@@ -3026,58 +3372,14 @@
     state.loading = false;
     render();
 
-    state.projectLoading = true;
-    renderHealth(state.data);
-
-    try {
-      let projectRows = [];
-      let adminLogRows = [];
-
-      if (window.DashboardAuth.getLatestProjectReportRows) {
-        try {
-          const projectPayload = await window.DashboardAuth.getLatestProjectReportRows();
-          projectRows = projectPayload.rows || [];
-          state.projectUploadCount = projectPayload.uploads?.length || 0;
-          if (state.projectUploadCount && !projectRows.length) {
-            state.projectReportError = "Project report uploads were found but no Excel rows could be loaded. Re-upload the Project report.";
-          }
-        } catch (projectError) {
-          state.projectReportError = projectError.message || "Could not load project statistics rows.";
-          console.warn("Could not load project statistics rows:", projectError);
-        }
-      } else {
-        state.projectReportError = "Project report loading is unavailable. Hard-refresh the page (Ctrl+Shift+R).";
-      }
-
-      if (window.DashboardAuth.getLatestAdminLogReportRows) {
-        try {
-          const adminPayload = await window.DashboardAuth.getLatestAdminLogReportRows();
-          adminLogRows = adminPayload.rows || [];
-          state.adminLogUploadCount = adminPayload.uploads?.length || 0;
-        } catch (adminLogError) {
-          console.warn("Could not load admin log rows:", adminLogError);
-        }
-      }
-
-      state.data = buildCreditsData(logRows, balanceRows, projectRows, adminLogRows);
-
-      if (window.DashboardAuth.getCreditUploadSummary) {
-        try {
-          state.uploadHistory = await window.DashboardAuth.getCreditUploadSummary();
-        } catch (uploadHistoryError) {
-          console.warn("Could not load upload history:", uploadHistoryError);
-          state.uploadHistory = [];
-        }
-      }
-    } catch (error) {
-      state.projectReportError = error.message || "Could not load project statistics from Supabase.";
-      console.warn("Could not load project statistics:", error);
-    } finally {
-      await statusPromise;
-      state.projectLoading = false;
-      creditsHydrated = true;
-      render();
+    const partner = options.partner || (state.partner !== "all" ? state.partner : null);
+    if (partner) {
+      await loadPartnerScopedData(partner, { force: options.force });
     }
+
+    await statusPromise;
+    creditsHydrated = true;
+    render();
   }
 
   function bindEvents() {
@@ -3109,22 +3411,11 @@
       const partner = button.dataset.partner || "";
       if (!partner) return;
 
-      state.partner = partner;
-      state.showAllHealthMonths = false;
-      if (els.partnerFilter) els.partnerFilter.value = partner;
-      state.page = 1;
-      render();
+      applyPartnerFilter(partner);
     });
 
     els.partnerFilter?.addEventListener("change", () => {
-      state.partner = els.partnerFilter.value;
-      state.showAllHealthMonths = false;
-      state.page = 1;
-      const data = getData();
-      renderSummary(data);
-      renderHistory(data);
-      renderHealth(data);
-      renderUploadHistory();
+      applyPartnerFilter(els.partnerFilter.value);
     });
 
     els.healthList?.addEventListener("click", (event) => {
@@ -3277,7 +3568,7 @@
           : "";
         els.uploadStatus.textContent = `Stored "${storedName}" for ${upload.partner} with ${stored.insertedRows || 0} Excel row(s) in Supabase.${monthNote}`;
 
-        await hydrateFromSupabase();
+        await hydrateFromSupabase({ force: true, partner: upload.partner });
       } catch (error) {
         console.error("Report upload failed:", error);
         state.loadError = "";
@@ -3311,7 +3602,7 @@
       try {
         const result = await window.DashboardAuth.uploadCreditLogs(file, cpPartner);
         els.uploadStatus.textContent = `Stored ${result.insertedRows || 0} credit log row(s) from ${file.name} for ${cpPartner}.`;
-        await hydrateFromSupabase();
+        await hydrateFromSupabase({ force: true, partner: cpPartner });
       } catch (error) {
         state.loadError = "";
         els.uploadStatus.textContent = error.message || "Credit log upload failed.";
@@ -3632,18 +3923,30 @@
     },
     openResult(item) {
       if (!item) return;
-      if (item.partner) {
-        state.partner = partnerDisplayLabel(item.partner);
-        if (els.partnerFilter) els.partnerFilter.value = state.partner;
-      }
       state.search = "";
       if (els.searchInput) els.searchInput.value = "";
+      if (item.partner) {
+        applyPartnerFilter(partnerDisplayLabel(item.partner));
+        return;
+      }
       state.page = 1;
       render();
     }
   };
 
+  async function initCreditsUsagePage() {
+    const client = window.DashboardAuth?.getClient?.();
+    if (client) {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const { data } = await client.auth.getSession();
+        if (data.session) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
+    hydrateFromSupabase();
+  }
+
   bindEvents();
   window.addEventListener("dashboard-partners-changed", refreshPartnerOptions);
-  hydrateFromSupabase();
+  initCreditsUsagePage();
 }());

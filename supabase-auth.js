@@ -209,7 +209,18 @@
     return data || {};
   }
 
-  async function fetchTableRows(tableName) {
+  function normalizePartnerLookupKey(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  function applyPartnerKeyFilter(query, column, partnerKeys = []) {
+    const keys = [...new Set((partnerKeys || []).map((value) => String(value || "").trim()).filter(Boolean))];
+    if (!column || !keys.length) return query;
+    if (keys.length === 1) return query.eq(column, keys[0]);
+    return query.in(column, keys);
+  }
+
+  async function fetchTableRows(tableName, options = {}) {
     const client = getClient();
     if (!client) {
       throw new Error("Supabase is not configured yet.");
@@ -217,13 +228,20 @@
 
     const rows = [];
     const pageSize = 1000;
+    const select = options.select || "*";
+    const partnerColumn = options.partnerColumn || "";
+    const partnerKeys = options.partnerKeys || [];
 
     for (let from = 0; ; from += pageSize) {
       const to = from + pageSize - 1;
-      const { data, error } = await client
+      let query = client
         .from(tableName)
-        .select("*")
+        .select(select)
         .range(from, to);
+
+      query = applyPartnerKeyFilter(query, partnerColumn, partnerKeys);
+
+      const { data, error } = await query;
 
       if (error) throw error;
       rows.push(...(data || []));
@@ -617,11 +635,14 @@
     return rows;
   }
 
-  async function getCreditUsageLogs() {
+  async function getCreditUsageLogs(options = {}) {
     if (!config.creditUsageTable) {
       return { rows: [], count: 0 };
     }
-    return fetchTableRows(config.creditUsageTable);
+    return fetchTableRows(config.creditUsageTable, {
+      partnerColumn: "cp_partner",
+      partnerKeys: options.partnerKeys
+    });
   }
 
   async function getPartnerCreditBalances() {
@@ -932,11 +953,15 @@
     return dedupeCreditReportRows(rows);
   }
 
-  async function getLatestCreditReportRows(reportType) {
+  async function getLatestCreditReportRows(reportType, options = {}) {
     const client = getClient();
     const uploadsTable = config.creditReportUploadsTable || "credit_report_uploads";
     const rowsTable = config.creditReportRowsTable || "credit_report_rows";
     const type = String(reportType || "").trim();
+    const partnerKeys = (options.partnerKeys || [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    const partnerLookup = new Set(partnerKeys.map(normalizePartnerLookupKey));
 
     if (!client || !type) {
       return { rows: [], count: 0, uploads: [], error: "" };
@@ -950,8 +975,12 @@
 
     if (uploadsError) throw uploadsError;
 
+    const scopedUploads = partnerLookup.size
+      ? (uploads || []).filter((upload) => partnerLookup.has(normalizePartnerLookupKey(uploadPartnerKey(upload))))
+      : (uploads || []);
+
     const latestUploadByCp = new Map();
-    (uploads || []).forEach((upload) => {
+    scopedUploads.forEach((upload) => {
       const cp = uploadPartnerKey(upload);
       if (!cp || latestUploadByCp.has(cp)) return;
       latestUploadByCp.set(cp, upload);
@@ -974,12 +1003,12 @@
     };
   }
 
-  async function getLatestProjectReportRows() {
-    return getLatestCreditReportRows("project");
+  async function getLatestProjectReportRows(options = {}) {
+    return getLatestCreditReportRows("project", options);
   }
 
-  async function getLatestAdminLogReportRows() {
-    return getLatestCreditReportRows("admin_logs");
+  async function getLatestAdminLogReportRows(options = {}) {
+    return getLatestCreditReportRows("admin_logs", options);
   }
 
   async function getCreditReportUploadSummary() {
